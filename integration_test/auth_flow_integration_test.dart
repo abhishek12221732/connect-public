@@ -1,0 +1,702 @@
+import 'package:flutter/material.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:integration_test/integration_test.dart';
+import '../test/main_test.dart' as app;
+import 'package:feelings/providers/theme_provider.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:feelings/features/home/screens/bottom_nav_bar.dart';
+
+// --- MOCK FIREBASE ---
+import 'package_helpers/firebase_core_mock.dart';
+
+import 'package:shared_preferences/shared_preferences.dart';
+
+// ✨ --- 1. IMPORT YOUR NEW MOCK HELPER --- ✨
+import 'package_helpers/google_sign_in_mock.dart';
+
+// ✨ EMULATOR CONFIGURATION - MUST MATCH main_test.dart
+const String _emulatorHost = '127.0.0.1';
+const int _authEmulatorPort = 9099;
+const int _firestoreEmulatorPort = 8080;
+
+void main() {
+  // Mock Firebase initialization
+  setupFirebaseCoreMocks();
+
+  final binding = IntegrationTestWidgetsFlutterBinding.ensureInitialized();
+  binding.framePolicy = LiveTestWidgetsFlutterBindingFramePolicy.benchmarkLive;
+
+  late ThemeProvider themeProvider;
+
+  setUpAll(() async {
+    Log.i('╔═══════════════════════════════════════════════╗');
+    Log.i('║  🧪 INTEGRATION TEST SETUP                   ║');
+    Log.i('╚═══════════════════════════════════════════════╝');
+
+    WidgetsFlutterBinding.ensureInitialized();
+    SharedPreferences.setMockInitialValues({});
+    Log.i('✅ SharedPreferences mocked');
+
+    // ✨ --- 2. SET UP THE GOOGLE SIGN-IN MOCK --- ✨
+    setupGoogleSignInMocks();
+    Log.i('✅ Google Sign-In mocked');
+
+    // Initialize Firebase
+    await Firebase.initializeApp();
+    Log.i('✅ Firebase initialized');
+
+    // ✨ CRITICAL: Connect to emulators IMMEDIATELY after initialization
+    try {
+      await FirebaseAuth.instance
+          .useAuthEmulator(_emulatorHost, _authEmulatorPort);
+      Log.i('✅ Auth Emulator: $_emulatorHost:$_authEmulatorPort');
+
+      FirebaseFirestore.instance
+          .useFirestoreEmulator(_emulatorHost, _firestoreEmulatorPort);
+      Log.i('✅ Firestore Emulator: $_emulatorHost:$_firestoreEmulatorPort');
+    } catch (e) {
+      Log.i('❌ EMULATOR CONNECTION FAILED: $e');
+      Log.i('⚠️  Make sure emulators are running: firebase emulators:start');
+      rethrow;
+    }
+
+    themeProvider = ThemeProvider();
+    await themeProvider.loadThemeFromPrefs();
+
+    Log.i('╔═══════════════════════════════════════════════╗');
+    Log.i('║  ✅ TEST SETUP COMPLETE                      ║');
+    Log.i('║  📊 Emulator UI: http://127.0.0.1:4000/      ║');
+    Log.i('╚═══════════════════════════════════════════════╝');
+  });
+
+  group('Full Auth E2E Flow', () {
+    // --- THIS IS YOUR EXISTING EMAIL/PASSWORD TEST ---
+    // (No changes needed here)
+    final String uniqueEmail =
+        'testuser_${DateTime.now().millisecondsSinceEpoch}@example.com';
+    const String testPassword = 'password123';
+    const String testName = 'E2E Test User';
+
+    testWidgets(
+        'Full user flow: Register -> Onboarding -> Logout -> Login -> Home',
+        (WidgetTester tester) async {
+      Log.i('╔═══════════════════════════════════════════════╗');
+      Log.i('║  🚀 STARTING E2E TEST (Email/Password)      ║');
+      Log.i('╚═══════════════════════════════════════════════╝');
+      Log.i('Test Email: $uniqueEmail');
+
+      // 1. --- Start the App ---
+      await tester.pumpWidget(app.MyApp(themeProvider: themeProvider));
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+      await tester.pump();
+
+      // --- 2. REGISTRATION ---
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 1: REGISTRATION');
+      Log.i('═══════════════════════════════════════════════');
+
+      await _waitForWidget(tester, find.text('Sign In'));
+      expect(find.text('Sign In'), findsOneWidget);
+
+      await tapWithRetry(
+        tester,
+        find.text('Don’t have an account? Register here'),
+      );
+
+      await _waitForWidget(
+        tester,
+        find.text('Create Account'),
+        timeout: const Duration(seconds: 10),
+      );
+      expect(find.text('Create Account'), findsOneWidget);
+
+      // Find fields
+      final nameField = find.widgetWithText(TextField, 'Name');
+      final emailField = find.widgetWithText(TextField, 'Email');
+      final passwordField = find.widgetWithText(TextField, 'Password');
+      final confirmField = find.widgetWithText(TextField, 'Confirm Password');
+
+      // Wait for fields to be ready
+      await _waitForWidget(tester, nameField);
+
+      // Fill form
+      Log.i('  ✏️  Filling registration form...');
+      await tester.enterText(nameField, testName);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.enterText(emailField, uniqueEmail);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.enterText(passwordField, testPassword);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.enterText(confirmField, testPassword);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      // ✨ DISMISS THE KEYBOARD
+      Log.i('  ⌨️  Dismissing keyboard...');
+      FocusManager.instance.primaryFocus?.unfocus();
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pumpAndSettle();
+      Log.i('  ✓ Keyboard dismissed');
+
+      // Tap Terms checkbox
+      Log.i('  📝 Tapping terms checkbox...');
+      final termsCheckbox = find.byType(Checkbox);
+      await _waitForWidget(tester, termsCheckbox);
+      await tester.tap(termsCheckbox, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      Log.i('  ✓ Checkbox checked');
+
+      // Tap Register
+      Log.i('  👆 Tapping Register button...');
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Register'),
+      );
+
+      Log.i('⏳ Waiting for registration and navigation...');
+      Log.i('⏰ Starting 15-second wait timer...');
+      await Future.delayed(const Duration(seconds: 15));
+      Log.i('✅ 15-second wait complete');
+
+      // Pump frames
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+
+      // --- 3. ONBOARDING (Updated Flow) ---
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 2: ONBOARDING');
+      Log.i('═══════════════════════════════════════════════');
+
+      // Page 1: Welcome
+      Log.i('📍 Onboarding Step 1: Welcome');
+      final getStartedButton =
+          find.widgetWithText(ElevatedButton, 'Get Started');
+
+      await _waitForWidget(
+        tester,
+        getStartedButton,
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(getStartedButton, findsOneWidget,
+          reason: "Could not find 'Get Started' button on Welcome page.");
+
+      await tester.tap(getStartedButton, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 500));
+
+      // Wait for page transition
+      for (int i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 2: Email Verification (SKIPPED)
+      Log.i('📍 Onboarding Step 2: Verification (SKIPPED)');
+
+      // Page 3: Profile
+      Log.i('📍 Onboarding Step 3: Profile');
+
+      await _waitForWidget(
+        tester,
+        find.text('Your Profile'),
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(find.text('Your Profile'), findsOneWidget,
+          reason: "Could not find 'Your Profile' page.");
+
+      expect(find.text(testName), findsOneWidget);
+
+      // Select a Gender
+      final genderDropdown = find.text('Select your gender');
+      await _waitForWidget(tester, genderDropdown);
+      await tester.tap(genderDropdown, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      await tapWithRetry(tester, find.text('Male').last, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      // Select a Love Language
+      final loveLanguageDropdown =
+          find.text('Select your love language (Optional)');
+      await _waitForWidget(tester, loveLanguageDropdown);
+      await tester.tap(loveLanguageDropdown, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      await tapWithRetry(tester, find.text('Quality Time').last,
+          warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Next'),
+        warnIfMissed: false,
+      );
+
+      // Wait for page transition
+      for (int i = 0; i < 15; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 4: Partner
+      Log.i('📍 Onboarding Step 4: Partner');
+
+      await _waitForWidget(
+        tester,
+        find.text('Connect with Partner'),
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(find.text('Connect with Partner'), findsOneWidget,
+          reason: "Could not find 'Connect with Partner' page.");
+
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(TextButton, 'Skip for now'),
+        warnIfMissed: false,
+      );
+
+      // Wait for page transition
+      Log.i('  ⏳ Waiting for page transition to Location...');
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 5: Location
+      Log.i('📍 Onboarding Step 5: Location');
+
+      await _waitForWidget(
+        tester,
+        find.text('Your Location'),
+        timeout: const Duration(seconds: 15),
+      );
+
+      expect(find.text('Your Location'), findsOneWidget,
+          reason: "Could not find 'Your Location' page.");
+
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Next'),
+        warnIfMissed: false,
+      );
+
+      // Wait for page transition
+      for (int i = 0; i < 15; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 6: Mood
+      Log.i('📍 Onboarding Step 6: Mood');
+
+      await _waitForWidget(
+        tester,
+        find.text('How Are You Feeling?'),
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(find.text('How Are You Feeling?'), findsOneWidget,
+          reason: "Could not find 'How Are You Feeling?' page.");
+
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Finish'),
+        warnIfMissed: false,
+      );
+
+      Log.i('⏳ Finishing onboarding...');
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      await _waitForWidget(
+        tester,
+        find.byType(BottomNavBar),
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(find.byType(BottomNavBar), findsOneWidget,
+          reason: "App did not navigate to BottomNavBar after onboarding.");
+      Log.i('✅ Landed on Home Screen');
+
+      // --- 4. LOGOUT ---
+      // This is the deterministic 4-part fix
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 3: LOGOUT');
+      Log.i('═══════════════════════════════════════════════');
+
+      // Step 1: Navigate to Profile
+      Log.i('  🔍 Looking for profile avatar...');
+      final profileAvatar = find.byType(CircleAvatar).first;
+      await _waitForWidget(tester, profileAvatar,
+          timeout: const Duration(seconds: 10));
+      Log.i('  ✓ Profile avatar found');
+
+      await tester.tap(profileAvatar, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+
+      Log.i('  ⏳ Waiting for profile screen...');
+      await _waitForWidget(
+        tester,
+        find.text('Edit Profile'),
+        timeout: const Duration(seconds: 10),
+      );
+      expect(find.text('Edit Profile'), findsOneWidget);
+      Log.i('  ✓ Profile screen loaded');
+
+      // Step 2: Tap the logout icon
+      Log.i('  👆 Tapping logout icon in AppBar...');
+      final logoutIcon = find.byIcon(Icons.logout);
+      await _waitForWidget(tester, logoutIcon);
+      await tester.tap(logoutIcon, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+
+      // Step 3: Confirm logout in the dialog
+      Log.i('  ⏳ Waiting for logout confirmation dialog...');
+      final logoutButton = find.widgetWithText(ElevatedButton, 'Log Out');
+      await _waitForWidget(tester, logoutButton);
+      Log.i('  👆 Confirming logout...');
+
+      // This tap now awaits the *entire* logout, cleanup, and navigation
+      // because of the logic we added to profile_screen.dart
+      await tester.tap(logoutButton, warnIfMissed: false);
+
+      // Step 4: Wait for the app to handle the manual cleanup and navigation.
+      Log.i('  ⏳ Waiting for manual cleanup and navigation to LoginScreen...');
+      await tester.pumpAndSettle(
+        const Duration(seconds: 15), // A generous timeout
+      );
+      Log.i('  ✅ UI settled.');
+
+      // Step 5: Verify we are on the Login Screen
+      await _waitForWidget(
+        tester,
+        find.text('Sign In'),
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(find.text('Sign In'), findsOneWidget);
+      Log.i('✅ Successfully logged out');
+
+      // --- 5. LOGIN ---
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 4: LOGIN');
+      Log.i('═══════════════════════════════════════════════');
+
+      final loginEmailField = find.widgetWithText(TextField, 'Email');
+      final loginPasswordField = find.widgetWithText(TextField, 'Password');
+
+      await _waitForWidget(tester, loginEmailField);
+
+      await tester.enterText(loginEmailField, uniqueEmail);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tester.enterText(loginPasswordField, testPassword);
+      await tester.pump(const Duration(milliseconds: 100));
+
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Login'),
+        warnIfMissed: false,
+      );
+
+      Log.i('⏳ Logging in...');
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      await _waitForWidget(
+        tester,
+        find.byType(BottomNavBar),
+        timeout: const Duration(seconds: 15),
+      );
+
+      // --- 6. FINAL VERIFICATION ---
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 5: FINAL VERIFICATION');
+      Log.i('═══════════════════════════════════════════════');
+      expect(find.byType(BottomNavBar), findsOneWidget,
+          reason: "Could not log back in and land on Home.");
+
+      Log.i('');
+      Log.i('╔═══════════════════════════════════════════════╗');
+      Log.i('║  ✅ TEST COMPLETE (Email)                    ║');
+      Log.i('╚═══════════════════════════════════════════════╝');
+    });
+
+    // ✨ --- 3. ADD A NEW TEST CASE FOR GOOGLE SIGN-IN --- ✨
+    testWidgets('Full user flow: Google Sign-In -> Onboarding',
+        (WidgetTester tester) async {
+      Log.i('╔═══════════════════════════════════════════════╗');
+      Log.i('║  🚀 STARTING E2E TEST (Google Sign-In)      ║');
+      Log.i('╚═══════════════════════════════════════════════╝');
+
+      // 1. --- Start the App ---
+      // We must restart the app to ensure a clean state
+      await tester.pumpWidget(app.MyApp(themeProvider: themeProvider));
+      await tester.pump(const Duration(milliseconds: 500));
+      await tester.pump();
+      await tester.pump();
+
+      // --- 2. GOOGLE SIGN-IN ---
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 1: GOOGLE SIGN-IN (MOCKED)');
+      Log.i('═══════════════════════════════════════════════');
+
+      await _waitForWidget(tester, find.text('Sign In'));
+      expect(find.text('Sign In'), findsOneWidget);
+
+      // Find the Google Sign-In button
+      // (This finder assumes it's an ElevatedButton with this text)
+      // Adjust if your button is different (e.g., find.byIcon)
+      final googleSignInButton =
+          find.text( 'Sign in with Google');
+      await _waitForWidget(tester, googleSignInButton);
+
+      // Tap the button. Our mock will intercept this.
+      Log.i('  👆 Tapping "Sign in with Google"...');
+      await tester.tap(googleSignInButton);
+
+      Log.i('  ⏳ Mock Google Sign-In running...');
+      Log.i('  ⏳ Waiting for navigation to Onboarding...');
+
+      // Wait for the app to sign in, create the user, and navigate
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+      await tester.pumpAndSettle();
+
+      // --- 3. ONBOARDING (Google User) ---
+      Log.i('');
+      Log.i('═══════════════════════════════════════════════');
+      Log.i('Phase 2: ONBOARDING (Google User)');
+      Log.i('═══════════════════════════════════════════════');
+
+      // Page 1: Welcome
+      Log.i('📍 Onboarding Step 1: Welcome');
+      final getStartedButton =
+          find.widgetWithText(ElevatedButton, 'Get Started');
+
+      await _waitForWidget(
+        tester,
+        getStartedButton,
+        timeout: const Duration(seconds: 10),
+      );
+      expect(getStartedButton, findsOneWidget,
+          reason: "Could not find 'Get Started' button on Welcome page.");
+      await tester.tap(getStartedButton, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 500));
+      for (int i = 0; i < 10; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 3: Profile
+      Log.i('📍 Onboarding Step 3: Profile');
+      await _waitForWidget(
+        tester,
+        find.text('Your Profile'),
+        timeout: const Duration(seconds: 10),
+      );
+      expect(find.text('Your Profile'), findsOneWidget,
+          reason: "Could not find 'Your Profile' page.");
+
+      // Verify the mock data is pre-filled
+      Log.i('  Verifying mock data: "Google User"');
+      expect(find.text('Google User'), findsOneWidget);
+
+      // (The rest of the onboarding flow is identical to the registration test)
+      final genderDropdown = find.text('Select your gender');
+      await _waitForWidget(tester, genderDropdown);
+      await tester.tap(genderDropdown, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      await tapWithRetry(tester, find.text('Male').last, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+
+      final loveLanguageDropdown =
+          find.text('Select your love language (Optional)');
+      await _waitForWidget(tester, loveLanguageDropdown);
+      await tester.tap(loveLanguageDropdown, warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tester.pump();
+      await tapWithRetry(tester, find.text('Quality Time').last,
+          warnIfMissed: false);
+      await tester.pump(const Duration(milliseconds: 300));
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Next'),
+        warnIfMissed: false,
+      );
+      for (int i = 0; i < 15; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 4: Partner
+      Log.i('📍 Onboarding Step 4: Partner');
+      await _waitForWidget(
+        tester,
+        find.text('Connect with Partner'),
+        timeout: const Duration(seconds: 10),
+      );
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(TextButton, 'Skip for now'),
+        warnIfMissed: false,
+      );
+      for (int i = 0; i < 20; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 5: Location
+      Log.i('📍 Onboarding Step 5: Location');
+      await _waitForWidget(
+        tester,
+        find.text('Your Location'),
+        timeout: const Duration(seconds: 15),
+      );
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Next'),
+        warnIfMissed: false,
+      );
+      for (int i = 0; i < 15; i++) {
+        await tester.pump(const Duration(milliseconds: 100));
+      }
+
+      // Page 6: Mood
+      Log.i('📍 Onboarding Step 6: Mood');
+      await _waitForWidget(
+        tester,
+        find.text('How Are You Feeling?'),
+        timeout: const Duration(seconds: 10),
+      );
+      await tapWithRetry(
+        tester,
+        find.widgetWithText(ElevatedButton, 'Finish'),
+        warnIfMissed: false,
+      );
+
+      Log.i('⏳ Finishing onboarding...');
+      await tester.pump(const Duration(seconds: 2));
+      await tester.pump();
+
+      await _waitForWidget(
+        tester,
+        find.byType(BottomNavBar),
+        timeout: const Duration(seconds: 10),
+      );
+
+      expect(find.byType(BottomNavBar), findsOneWidget,
+          reason: "App did not navigate to BottomNavBar after onboarding.");
+      Log.i('✅ Landed on Home Screen');
+
+      Log.i('');
+      Log.i('╔═══════════════════════════════════════════════╗');
+      Log.i('║  ✅ TEST COMPLETE (Google)                   ║');
+      Log.i('╚═══════════════════════════════════════════════╝');
+    });
+  });
+}
+
+// ============================================================
+// HELPER FUNCTIONS
+// ============================================================
+
+/// Waits for a widget to appear in the widget tree with polling
+Future<void> _waitForWidget(
+  WidgetTester tester,
+  Finder finder, {
+  Duration timeout = const Duration(seconds: 15),
+  Duration pollInterval = const Duration(milliseconds: 100),
+}) async {
+  final endTime = DateTime.now().add(timeout);
+
+  while (DateTime.now().isBefore(endTime)) {
+    await tester.pump();
+
+    if (finder.evaluate().isNotEmpty) {
+      Log.i('  ✓ Found: ${finder.toString()}');
+      await tester.pump(const Duration(milliseconds: 100));
+      return;
+    }
+
+    await tester.pump(pollInterval);
+  }
+
+  throw TestFailure(
+    'Widget not found within $timeout: ${finder.toString()}',
+  );
+}
+
+/// Taps a widget with retry logic
+Future<void> tapWithRetry(
+  WidgetTester tester,
+  Finder finder, {
+  int maxAttempts = 3,
+  Duration retryDelay = const Duration(milliseconds: 500),
+  bool warnIfMissed = true,
+}) async {
+  for (int attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      await _waitForWidget(
+        tester,
+        finder,
+        timeout: const Duration(seconds: 5),
+      );
+
+      await tester.tap(finder, warnIfMissed: warnIfMissed);
+      await tester.pump(const Duration(milliseconds: 100));
+      await tester.pump();
+
+      Log.i('  ✓ Tap successful (attempt ${attempt + 1})');
+      return;
+    } catch (e) {
+      Log.i('  ⚠ Tap attempt ${attempt + 1} failed: $e');
+      if (attempt == maxAttempts - 1) {
+        rethrow;
+      }
+      await tester.pump(retryDelay);
+    }
+  }
+}
+
+/// Waits for a condition to be true with polling
+Future<bool> waitForCondition(
+  WidgetTester tester,
+  bool Function() condition, {
+  Duration timeout = const Duration(seconds: 15),
+  Duration pollInterval = const Duration(milliseconds: 100),
+}) async {
+  final endTime = DateTime.now().add(timeout);
+
+  while (DateTime.now().isBefore(endTime)) {
+    await tester.pump();
+
+    if (condition()) {
+      await tester.pump(const Duration(milliseconds: 100));
+      return true;
+    }
+
+    await tester.pump(pollInterval);
+  }
+
+  return false;
+}
+
+class Log {
+  static void i(String message) {
+    // ignore: avoid_print
+    print(message);
+  }
+}
