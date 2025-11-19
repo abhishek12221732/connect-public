@@ -1,7 +1,7 @@
 # Feelings — A Relationship Management App  
 A full-scale, cross-platform Flutter application built to help couples communicate better, track memories, plan events, and strengthen their relationship through meaningful interactions.
 
-> 🟢 **Published on Google Play** (Production Release: Nov 11, 2025)
+> 🟢 **Published on Google Play** (Production Release: Nov 19, 2025)
 
 Web app Link -> [Feelings App](https://feelings-d43f8.web.app/)
 Play Store Link -> [Feelings App](https://play.google.com/store/apps/details?id=com.feelings.app)
