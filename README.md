@@ -4,7 +4,11 @@ A full-scale, cross-platform Flutter application built to help couples communica
 > 🟢 **Published on Google Play** (Production Release: Nov 19, 2025)
 
 Web app Link -> [Feelings App](https://feelings-d43f8.web.app/)
+
+
 Play Store Link -> [Feelings App](https://play.google.com/store/apps/details?id=com.feelings.app)
+
+
 Test Credentials:
 - email : allenkyle1108@gmail.com
 - password : password
