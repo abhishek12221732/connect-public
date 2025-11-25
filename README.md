@@ -10,8 +10,8 @@ Play Store Link -> [Feelings App](https://play.google.com/store/apps/details?id=
 
 
 Test Credentials:
-- email : allenkyle1108@gmail.com
-- password : password
+- email : johndoe1903@gmail.com
+- password : john@1234A
 ---
 
 ## 🚀 Features
