@@ -13,6 +13,9 @@ import 'package:feelings/widgets/pulsing_dots_indicator.dart';
 // ✨ --- NEW IMPORTS --- ✨
 import 'package:feelings/providers/secret_note_provider.dart';
 import 'package:feelings/features/secret_note/widgets/secret_note_view_dialog.dart';
+import 'package:feelings/theme/mood_theme.dart';
+import 'package:feelings/features/mood/utils/mood_categories.dart';
+import 'package:feelings/services/review_service.dart';
 // ✨ --- END NEW IMPORTS --- ✨
 
 class MoodBox extends StatefulWidget {
@@ -27,32 +30,37 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
   
   // ✨ --- NEW ANIMATION CONTROLLER --- ✨
   late final AnimationController _giftAnimationController;
+  late final AnimationController _moodChangeController; // ✨ Triggered on mood update
+  String? _lastKnownMood; // To detect changes
 
-  final List<String> moods = const [
-    'Happy', 'Excited', 'Loved', 'Grateful', 'Peaceful', 'Content',
-    'Sad', 'Stressed', 'Lonely', 'Angry', 'Anxious', 'Confused'
+  // Primary moods - shown by default (most commonly used)
+  final List<String> primaryMoods = const [
+    'Happy', 'Loved', 'Tired', 'Stressed', 'Sad', 
+    'Excited', 'Grateful', 'Anxious', 'Chill'
   ];
 
-  final Map<String, double> moodHues = const {
-    'Happy': 45.0,      // Yellow/Amber Hue
-    'Excited': 15.0,    // Orange Hue
-    'Loved': 340.0,     // Pink Hue
-    'Grateful': 120.0,  // Green Hue
-    'Peaceful': 207.0,  // Light Blue Hue
-    'Content': 175.0,   // Teal Hue
-    'Sad': 210.0,       // Blue Grey Hue
-    'Stressed': 5.0,    // Red Hue
-    'Lonely': 0.0,      // Grey (Hue doesn't matter much, will be desaturated)
-    'Angry': 0.0,       // Dark Red Hue
-    'Anxious': 260.0,   // Purple Hue
-    'Confused': 230.0,  // Indigo Hue
-  };
+  // Extended moods - shown when "More" is tapped
+  final List<String> extendedMoods = const [
+    'Peaceful', 'Content', 'Bored', 'Lonely', 'Angry', 
+    'Confused', 'Hopeful', 'Motivated', 'Silly', 
+    'Romantic', 'Focused', 'Sick', 'Sleepy', 'Nostalgic', 'Jealous'
+  ];
+
+  // Combined list for lookups
+  List<String> get allMoods => [...primaryMoods, ...extendedMoods];
+
+  // ✨ --- NEW: Category Based Color Logic --- ✨
+  // No more hardcoded hues here. We use the Theme extension.
   
   final Map<String, String> moodEmojis = const {
     'Happy': '😄', 'Excited': '😆', 'Loved': '🥰', 'Grateful': '🙏',
     'Peaceful': '😌', 'Content': '😊', 'Sad': '😢', 'Stressed': '😰',
     'Lonely': '😔', 'Angry': '😡', 'Anxious': '😨', 'Confused': '😕',
+    'Tired': '😴', 'Chill': '😎', 'Bored': '😑', 'Hopeful': '🤞',
+    'Motivated': '💪', 'Silly': '🤪', 'Romantic': '😘', 'Focused': '🧐',
+    'Sick': '🤒', 'Sleepy': '🥱', 'Nostalgic': '🥲', 'Jealous': '😒',
   };
+
   final Map<String, IconData> moodIcons = {
     'Happy': Icons.sentiment_satisfied, 'Excited': Icons.sentiment_very_satisfied,
     'Loved': Icons.favorite, 'Grateful': Icons.emoji_emotions,
@@ -60,6 +68,12 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
     'Sad': Icons.sentiment_dissatisfied, 'Stressed': Icons.sentiment_very_dissatisfied,
     'Lonely': Icons.sentiment_neutral, 'Angry': Icons.sentiment_very_dissatisfied,
     'Anxious': Icons.sentiment_dissatisfied, 'Confused': Icons.sentiment_neutral,
+    'Tired': Icons.bedtime, 'Chill': Icons.weekend, 'Bored': Icons.sentiment_neutral,
+    'Hopeful': Icons.star_outline, 'Motivated': Icons.fitness_center,
+    'Silly': Icons.mood, 'Romantic': Icons.favorite_border,
+    'Focused': Icons.center_focus_strong, 'Sick': Icons.sick,
+    'Sleepy': Icons.nightlight_round, 'Nostalgic': Icons.history,
+    'Jealous': Icons.remove_red_eye,
   };
 
   @override
@@ -75,36 +89,52 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
       vsync: this,
       duration: const Duration(milliseconds: 700),
     )..repeat(reverse: true);
+    
+    _moodChangeController = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800), // Elastic pop duration
+    );
     // ✨ --- END NEW ANIMATION --- ✨
   }
 
   @override
   void dispose() {
     _animationController.dispose();
-    _giftAnimationController.dispose(); // ✨ --- DISPOSE --- ✨
+    _giftAnimationController.dispose(); 
+    _moodChangeController.dispose(); // ✨ --- DISPOSE --- ✨
     super.dispose();
   }
 
   Color _getAdaptiveMoodColor(String mood, BuildContext context) {
-    if (!moodHues.containsKey(mood)) return Colors.grey;
+    if (!moodEmojis.containsKey(mood)) return Colors.grey;
 
-    final theme = Theme.of(context);
-    final HSLColor themeStyle = HSLColor.fromColor(theme.colorScheme.primary);
-    final double moodHue = moodHues[mood]!;
+    // 1. Get the current MoodTheme extension
+    final moodTheme = Theme.of(context).extension<MoodTheme>();
+    if (moodTheme == null) return Colors.grey; // Fallback
 
-    if (mood == 'Lonely') {
-      return HSLColor.fromAHSL(1.0, 0, 0.1, themeStyle.lightness * 0.8).toColor();
+    // 2. Identify Category
+    final category = MoodCategories.getCategory(mood);
+
+    // 3. Get Base Color from Category
+    Color baseColor;
+    switch (category) {
+      case MoodCategory.joy: baseColor = moodTheme.joy; break;
+      case MoodCategory.playful: baseColor = moodTheme.playful; break;
+      case MoodCategory.love: baseColor = moodTheme.love; break;
+      case MoodCategory.warmth: baseColor = moodTheme.warmth; break;
+      case MoodCategory.peace: baseColor = moodTheme.peace; break;
+      case MoodCategory.focus: baseColor = moodTheme.focus; break;
+      case MoodCategory.sadness: baseColor = moodTheme.sadness; break;
+      case MoodCategory.anger: baseColor = moodTheme.anger; break;
+      case MoodCategory.anxiety: baseColor = moodTheme.anxiety; break;
+      case MoodCategory.malaise: baseColor = moodTheme.malaise; break;
+      case MoodCategory.fatigue: baseColor = moodTheme.fatigue; break;
+      case MoodCategory.ennui: baseColor = moodTheme.ennui; break;
     }
-    if (mood == 'Angry') {
-      return HSLColor.fromAHSL(1.0, 0, themeStyle.saturation * 0.9, themeStyle.lightness * 0.7).toColor();
-    }
 
-    return HSLColor.fromAHSL(
-      1.0,
-      moodHue,
-      themeStyle.saturation.clamp(0.4, 1.0),
-      themeStyle.lightness.clamp(0.4, 0.8),
-    ).toColor();
+    // 4. Apply Micro-Modifications for distinctness
+    final modification = MoodCategories.getModification(mood);
+    return modification.applyTo(baseColor);
   }
 
   Widget _buildEmojiWidget(String emoji, {double fontSize = 20}) {
@@ -149,135 +179,20 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
         child: Dialog(
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
           backgroundColor: Colors.transparent,
-          child: Container(
-            constraints: const BoxConstraints(maxHeight: 600, maxWidth: 400),
-            decoration: BoxDecoration(
-              color: colorScheme.surface,
-              borderRadius: BorderRadius.circular(24),
-              boxShadow: [
-                BoxShadow(
-                  color: theme.shadowColor.withOpacity(0.1),
-                  blurRadius: 20,
-                  offset: const Offset(0, 10),
-                ),
-              ],
-            ),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: colorScheme.primary.withOpacity(0.3),
-                    borderRadius: const BorderRadius.only(
-                      topLeft: Radius.circular(24),
-                      topRight: Radius.circular(24),
-                    ),
-                  ),
-                  child: Row(
-                    children: [
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: colorScheme.primary,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Icon(Icons.mood, color: colorScheme.onPrimary, size: 20),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: Text('How are you feeling?', style: theme.textTheme.titleLarge),
-                      ),
-                      GestureDetector(
-                        onTap: () => Navigator.pop(context),
-                        child: Container(
-                          padding: const EdgeInsets.all(4),
-                          decoration: BoxDecoration(
-                            color: colorScheme.surfaceContainerHighest,
-                            borderRadius: BorderRadius.circular(8),
-                          ),
-                          child: Icon(Icons.close, size: 20, color: colorScheme.onSurfaceVariant),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Consumer<UserProvider>(
-                  builder: (context, userProvider, child) => Flexible(
-                    child: SingleChildScrollView(
-                      padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                      child: GridView.builder(
-                        shrinkWrap: true,
-                        physics: const NeverScrollableScrollPhysics(),
-                        gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                          crossAxisCount: 3,
-                          mainAxisSpacing: 16.0,
-                          crossAxisSpacing: 16.0,
-                          childAspectRatio: 0.85,
-                        ),
-                        itemCount: moods.length,
-                        itemBuilder: (context, index) {
-                          final mood = moods[index];
-                          final isSelected = userProvider.userData?['mood'] == mood;
-                          
-                          final moodColor = _getAdaptiveMoodColor(mood, context);
-
-                          return GestureDetector(
-                            onTap: () async {
-                              await userProvider.updateUserMood(mood);
-                              Navigator.pop(context);
-                            },
-                            child: FadeInUp(
-                              duration: Duration(milliseconds: 300 + (index * 30)),
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: isSelected ? moodColor.withOpacity(0.2) : colorScheme.surfaceContainerHighest,
-                                  borderRadius: BorderRadius.circular(16),
-                                  border: Border.all(
-                                    color: isSelected ? moodColor : theme.dividerColor,
-                                    width: isSelected ? 2 : 1,
-                                  ),
-                                ),
-                                child: Padding(
-                                  padding: const EdgeInsets.all(6.0),
-                                  child: Column(
-                                    mainAxisAlignment: MainAxisAlignment.center,
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Container(
-                                        padding: const EdgeInsets.all(6),
-                                        decoration: BoxDecoration(
-                                          color: moodColor.withOpacity(0.1),
-                                          borderRadius: BorderRadius.circular(8),
-                                        ),
-                                        child: _buildEmojiWidget(moodEmojis[mood]!),
-                                      ),
-                                      const SizedBox(height: 4),
-                                      Flexible(
-                                        child: Text(
-                                          mood,
-                                          style: theme.textTheme.labelMedium?.copyWith(
-                                            fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
-                                            color: isSelected ? moodColor : colorScheme.onSurfaceVariant,
-                                          ),
-                                          textAlign: TextAlign.center,
-                                          maxLines: 1,
-                                          overflow: TextOverflow.ellipsis,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
+          child: StatefulBuilder(
+            builder: (context, setDialogState) {
+              bool showAllMoods = false;
+              
+              return _MoodSelectorContent(
+                theme: theme,
+                colorScheme: colorScheme,
+                primaryMoods: primaryMoods,
+                extendedMoods: extendedMoods,
+                moodEmojis: moodEmojis,
+                getAdaptiveMoodColor: _getAdaptiveMoodColor,
+                buildEmojiWidget: _buildEmojiWidget,
+              );
+            },
           ),
         ),
       ),
@@ -308,10 +223,20 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
         final currentMood = userData?['mood'] ?? 'None';
         final partnerMood = isCoupleActive ? (partnerData['mood'] ?? 'None') : 'None';
 
+        // ✨ --- TRIGGER ANIMATION IF MOOD CHANGED --- ✨
+        if (_lastKnownMood != null && _lastKnownMood != currentMood) {
+           _moodChangeController.forward(from: 0.0);
+        }
+        _lastKnownMood = currentMood;
+        // ✨ --------------------------------------- ✨
+
         final partnerMoodColor = _getAdaptiveMoodColor(partnerMood, context);
         final moodColor = _getAdaptiveMoodColor(currentMood, context);
         
-        final areMoodsSynced = isCoupleActive && currentMood != 'None' && currentMood == partnerMood;
+        final areMoodsSynced = isCoupleActive && 
+            currentMood != 'None' && 
+            partnerMood != 'None' &&
+            MoodCategories.getCategory(currentMood) == MoodCategories.getCategory(partnerMood);
 
         final double? userLat = userData?['latitude'];
         final double? userLon = userData?['longitude'];
@@ -397,16 +322,18 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
                       ),
                       if (areMoodsSynced)
                         Positioned.fill(
-                          child: AnimatedBuilder(
-                            animation: _animationController,
-                            builder: (context, child) {
-                              return CustomPaint(
-                                painter: _FluidWaveArcPainter(
-                                  animationValue: _animationController.value,
-                                  arcColor: moodColor,
-                                ),
-                              );
-                            },
+                          child: RepaintBoundary(
+                            child: AnimatedBuilder(
+                              animation: _animationController,
+                              builder: (context, child) {
+                                return CustomPaint(
+                                  painter: _FluidWaveArcPainter(
+                                    animationValue: _animationController.value,
+                                    arcColor: moodColor,
+                                  ),
+                                );
+                              },
+                            ),
                           ),
                         ),
                       _buildProfileAvatar(
@@ -422,6 +349,7 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
                         // ✨ --- PASS THE PROVIDER DATA --- ✨
                         secretNoteProvider: secretNoteProvider,
                         giftAnimationController: _giftAnimationController,
+                        moodChangeController: null, // No animation for partner (yet)
                         
                       ),
                       _buildProfileAvatar(
@@ -437,6 +365,7 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
                         // ✨ --- NOT NEEDED FOR "YOU" --- ✨
                         secretNoteProvider: null,
                         giftAnimationController: null,
+                        moodChangeController: _moodChangeController, // ✨ Pass controller
                       ),
                       Positioned(
                         left: 0, right: 0, top: 65,
@@ -480,9 +409,10 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
       required bool leftAligned, 
       required bool showWave, 
       required AnimationController animationController,
-      // ✨ --- NEW PARAMETERS --- ✨
       required SecretNoteProvider? secretNoteProvider,
       required AnimationController? giftAnimationController,
+      // ✨ --- NEW PARAMETER --- ✨
+      required AnimationController? moodChangeController,
     }) {
     // ✨ --- END OF SIGNATURE UPDATE --- ✨
       
@@ -507,6 +437,7 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
         secretNoteProvider.activeSecretNote != null;
     // ✨ --- END NEW LOGIC --- ✨
   
+    // ✨ --- WRAP IN ANIMATION --- ✨
     Widget avatarWidget = GestureDetector(
       onTap: leftAligned ? null : () => _selectMood(context),
       child: Container(
@@ -525,6 +456,25 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
         ),
       ),
     );
+
+    if (moodChangeController != null) {
+      avatarWidget = ScaleTransition(
+        scale: TweenSequence<double>([
+          TweenSequenceItem(
+            tween: Tween<double>(begin: 1.0, end: 1.25)
+                .chain(CurveTween(curve: Curves.easeOut)),
+            weight: 30, // Fast expand
+          ),
+          TweenSequenceItem(
+            tween: Tween<double>(begin: 1.25, end: 1.0)
+                .chain(CurveTween(curve: Curves.elasticOut)),
+            weight: 70, // Boing back to normal
+          ),
+        ]).animate(moodChangeController),
+        child: avatarWidget,
+      );
+    }
+    // ✨ --- END ANIMATION WRAPPER --- ✨
   
     return Positioned(
       left: leftAligned ? 20 : null,
@@ -580,17 +530,19 @@ class _MoodBoxState extends State<MoodBox> with TickerProviderStateMixin {
                 child: SizedBox(
                   width: 130,
                   height: 130,
-                  child: AnimatedBuilder(
-                    animation: animationController,
-                    builder: (context, _) {
-                      return CustomPaint(
-                        painter: _FluidWaveCirclePainter(
-                          animationValue: animationController.value,
-                          color: color,
-                          radius: 55.0,
-                        ),
-                      );
-                    },
+                  child: RepaintBoundary(
+                    child: AnimatedBuilder(
+                      animation: animationController,
+                      builder: (context, _) {
+                        return CustomPaint(
+                          painter: _FluidWaveCirclePainter(
+                            animationValue: animationController.value,
+                            color: color,
+                            radius: 55.0,
+                          ),
+                        );
+                      },
+                    ),
                   ),
                 ),
               ),
@@ -686,13 +638,26 @@ class _FluidWaveArcPainter extends CustomPainter {
   final double animationValue;
   final Color arcColor;
 
+  // Cache static variables to avoid reallocation
+  static Path? _cachedBasePath;
+  static ui.PathMetric? _cachedMetric;
+  static Size? _cachedSize;
+
   _FluidWaveArcPainter({required this.animationValue, required this.arcColor});
 
   @override
   void paint(Canvas canvas, Size size) {
-    final path = Path()
-      ..moveTo(70, 100)
-      ..quadraticBezierTo(size.width / 2, 45, size.width - 70, 100);
+    // 1. REUSE THE PATH: Only rebuild the base path if the size changes
+    if (_cachedSize != size || _cachedBasePath == null) {
+      _cachedSize = size;
+      _cachedBasePath = Path()
+        ..moveTo(70, 100)
+        ..quadraticBezierTo(size.width / 2, 45, size.width - 70, 100);
+      _cachedMetric = _cachedBasePath!.computeMetrics().first;
+    }
+
+    final ui.PathMetric? metric = _cachedMetric;
+    if (metric == null) return;
 
     final paint = Paint()
       ..style = PaintingStyle.stroke
@@ -710,25 +675,32 @@ class _FluidWaveArcPainter extends CustomPainter {
       ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10.0);
 
     final wavePath = Path();
-    final ui.PathMetric metric = path.computeMetrics().first;
 
     const double waveFrequency = 4.0;
     const double waveAmplitude = 6.0; 
     final double animationPhase = animationValue * 2 * pi;
+    final double length = metric.length;
 
-    for (double dist = 0.0; dist < metric.length; dist += 2) {
+    // 2. OPTIMIZATION: Increase step from 2 to 6 (3x faster)
+    // The blur hides the lack of precision.
+    for (double dist = 0.0; dist < length; dist += 6) {
       final ui.Tangent? tangent = metric.getTangentForOffset(dist);
       if (tangent == null) continue;
 
-      final double sineValue = sin((dist / metric.length) * waveFrequency * 2 * pi - animationPhase);
+      final double sineValue = sin((dist / length) * waveFrequency * 2 * pi - animationPhase);
       
-      final Offset normal = Offset(-tangent.vector.dy, tangent.vector.dx);
-      final Offset point = tangent.position + (normal * sineValue * waveAmplitude);
+      // Manual vector math is slightly faster than creating Offset objects repeatedly, 
+      // but the biggest win is the loop step.
+      final double dx = tangent.vector.dy * -1; // Normal vector x
+      final double dy = tangent.vector.dx;      // Normal vector y
+      
+      final double x = tangent.position.dx + (dx * sineValue * waveAmplitude);
+      final double y = tangent.position.dy + (dy * sineValue * waveAmplitude);
 
       if (dist == 0.0) {
-        wavePath.moveTo(point.dx, point.dy);
+        wavePath.moveTo(x, y);
       } else {
-        wavePath.lineTo(point.dx, point.dy);
+        wavePath.lineTo(x, y);
       }
     }
     canvas.drawPath(wavePath, paint);
@@ -736,14 +708,22 @@ class _FluidWaveArcPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _FluidWaveArcPainter oldDelegate) {
-    return oldDelegate.animationValue != animationValue;
+    return oldDelegate.animationValue != animationValue || oldDelegate.arcColor != arcColor;
   }
 }
+
+
+
 
 class _FluidWaveCirclePainter extends CustomPainter {
   final double animationValue;
   final Color color;
   final double radius;
+
+  // Cache
+  static Path? _cachedBasePath;
+  static ui.PathMetric? _cachedMetric;
+  static Size? _cachedSize;
 
   _FluidWaveCirclePainter({
     required this.animationValue,
@@ -753,9 +733,19 @@ class _FluidWaveCirclePainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
+    // 1. REUSE THE PATH
+    if (_cachedSize != size || _cachedBasePath == null) {
+      _cachedSize = size;
+      final center = Offset(size.width / 2, size.height / 2);
+      final rect = Rect.fromCircle(center: center, radius: radius);
+      _cachedBasePath = Path()..addOval(rect);
+      _cachedMetric = _cachedBasePath!.computeMetrics().first;
+    }
+
+    final ui.PathMetric? metric = _cachedMetric;
+    if (metric == null) return;
+
     final center = Offset(size.width / 2, size.height / 2);
-    final rect = Rect.fromCircle(center: center, radius: radius);
-    final path = Path()..addOval(rect);
 
     final paint = Paint()
       ..style = PaintingStyle.stroke
@@ -769,23 +759,29 @@ class _FluidWaveCirclePainter extends CustomPainter {
       ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 10.0);
 
     final wavePath = Path();
-    final ui.PathMetric metric = path.computeMetrics().first;
+    
     const double waveFrequency = 10.0;
     const double waveAmplitude = 4.0;
     final double animationPhase = animationValue * 2 * pi;
+    final double length = metric.length;
 
-    for (double dist = 0.0; dist < metric.length; dist += 2) {
+    // 2. OPTIMIZATION: Increase step from 2 to 6
+    for (double dist = 0.0; dist < length; dist += 6) {
       final ui.Tangent? tangent = metric.getTangentForOffset(dist);
       if (tangent == null) continue;
 
-      final double sineValue = sin((dist / metric.length) * waveFrequency * 2 * pi - animationPhase);
-      final Offset normal = Offset(-tangent.vector.dy, tangent.vector.dx);
-      final Offset point = tangent.position + (normal * sineValue * waveAmplitude);
+      final double sineValue = sin((dist / length) * waveFrequency * 2 * pi - animationPhase);
+      
+      final double dx = tangent.vector.dy * -1;
+      final double dy = tangent.vector.dx;
+
+      final double x = tangent.position.dx + (dx * sineValue * waveAmplitude);
+      final double y = tangent.position.dy + (dy * sineValue * waveAmplitude);
 
       if (dist == 0.0) {
-        wavePath.moveTo(point.dx, point.dy);
+        wavePath.moveTo(x, y);
       } else {
-        wavePath.lineTo(point.dx, point.dy);
+        wavePath.lineTo(x, y);
       }
     }
     wavePath.close();
@@ -795,6 +791,233 @@ class _FluidWaveCirclePainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _FluidWaveCirclePainter oldDelegate) {
-    return oldDelegate.animationValue != animationValue || oldDelegate.color != color || oldDelegate.radius != radius;
+    return oldDelegate.animationValue != animationValue || 
+           oldDelegate.color != color || 
+           oldDelegate.radius != radius;
+  }
+}
+
+
+
+// Expandable Mood Selector Dialog Content
+class _MoodSelectorContent extends StatefulWidget {
+  final ThemeData theme;
+  final ColorScheme colorScheme;
+  final List<String> primaryMoods;
+  final List<String> extendedMoods;
+  final Map<String, String> moodEmojis;
+  final Color Function(String mood, BuildContext context) getAdaptiveMoodColor;
+  final Widget Function(String emoji, {double fontSize}) buildEmojiWidget;
+
+  const _MoodSelectorContent({
+    required this.theme,
+    required this.colorScheme,
+    required this.primaryMoods,
+    required this.extendedMoods,
+    required this.moodEmojis,
+    required this.getAdaptiveMoodColor,
+    required this.buildEmojiWidget,
+  });
+
+  @override
+  State<_MoodSelectorContent> createState() => _MoodSelectorContentState();
+}
+
+class _MoodSelectorContentState extends State<_MoodSelectorContent> {
+  bool _showAllMoods = false;
+
+  List<String> get _visibleMoods => _showAllMoods 
+      ? [...widget.primaryMoods, ...widget.extendedMoods]
+      : widget.primaryMoods;
+
+  @override
+  Widget build(BuildContext context) {
+    // 3 rows collapsed (~340px), 6 rows expanded (~580px)
+    final double gridHeight = _showAllMoods ? 580 : 340;
+    
+    return AnimatedContainer(
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+      constraints: BoxConstraints(maxHeight: gridHeight + 120, maxWidth: 400), // +120 for header and button
+      decoration: BoxDecoration(
+        color: widget.colorScheme.surface,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: [
+          BoxShadow(
+            color: widget.theme.shadowColor.withOpacity(0.1),
+            blurRadius: 20,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              color: widget.colorScheme.primary.withOpacity(0.3),
+              borderRadius: const BorderRadius.only(
+                topLeft: Radius.circular(24),
+                topRight: Radius.circular(24),
+              ),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: widget.colorScheme.primary,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.mood, color: widget.colorScheme.onPrimary, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text('How are you feeling?', style: widget.theme.textTheme.titleLarge),
+                ),
+                GestureDetector(
+                  onTap: () => Navigator.pop(context),
+                  child: Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: widget.colorScheme.surfaceContainerHighest,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.close, size: 20, color: widget.colorScheme.onSurfaceVariant),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Mood Grid - scrollable
+          Consumer<UserProvider>(
+            builder: (context, userProvider, child) => Flexible(
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+                child: GridView.builder(
+                  shrinkWrap: true,
+                  physics: const NeverScrollableScrollPhysics(),
+                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                    crossAxisCount: 3,
+                    mainAxisSpacing: 12.0,
+                    crossAxisSpacing: 12.0,
+                    childAspectRatio: 0.9,
+                  ),
+                  itemCount: _visibleMoods.length,
+                  itemBuilder: (context, index) {
+                    final mood = _visibleMoods[index];
+                    final isSelected = userProvider.userData?['mood'] == mood;
+                    final moodColor = widget.getAdaptiveMoodColor(mood, context);
+
+                      return GestureDetector(
+                        onTap: () {
+                          // Fire and forget - Optimistic update handles the state
+                          userProvider.updateUserMood(mood);
+                          
+                          // ✨ Smart Review Trigger ✨
+                          // Only ask if mood is positive (Joy, Love, Playful, etc.)
+                          final category = MoodCategories.getCategory(mood);
+                          if ([
+                            MoodCategory.joy, 
+                            MoodCategory.playful, 
+                            MoodCategory.love, 
+                            MoodCategory.warmth, 
+                            MoodCategory.peace, 
+                            MoodCategory.focus
+                          ].contains(category)) {
+                             ReviewService().requestSmartReview(context);
+                          }
+                          
+                          Navigator.pop(context);
+                        },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        decoration: BoxDecoration(
+                          color: isSelected 
+                              ? moodColor.withOpacity(0.2) 
+                              : widget.colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isSelected ? moodColor : widget.theme.dividerColor,
+                            width: isSelected ? 2 : 1,
+                          ),
+                        ),
+                        child: Padding(
+                          padding: const EdgeInsets.all(4.0),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                padding: const EdgeInsets.all(5),
+                                decoration: BoxDecoration(
+                                  color: moodColor.withOpacity(0.1),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: widget.buildEmojiWidget(
+                                  widget.moodEmojis[mood]!, 
+                                  fontSize: 18,
+                                ),
+                              ),
+                              const SizedBox(height: 3),
+                              Flexible(
+                                child: Text(
+                                  mood,
+                                  style: widget.theme.textTheme.labelSmall?.copyWith(
+                                    fontWeight: isSelected ? FontWeight.bold : FontWeight.w500,
+                                    color: isSelected ? moodColor : widget.colorScheme.onSurfaceVariant,
+                                  ),
+                                  textAlign: TextAlign.center,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ),
+          ),
+          // Expand/collapse button - FIXED at bottom
+          Padding(
+            padding: const EdgeInsets.only(bottom: 8, top: 2),
+            child: GestureDetector(
+              onTap: () => setState(() => _showAllMoods = !_showAllMoods),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: widget.colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(
+                      _showAllMoods ? Icons.expand_less : Icons.expand_more,
+                      size: 18,
+                      color: widget.colorScheme.primary,
+                    ),
+                    const SizedBox(width: 6),
+                    Text(
+                      _showAllMoods ? 'Less' : 'More',
+                      style: widget.theme.textTheme.labelMedium?.copyWith(
+                        color: widget.colorScheme.primary,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }

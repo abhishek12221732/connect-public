@@ -25,6 +25,9 @@ class UserRepository {
       : _firestore = firestore ?? FirebaseFirestore.instance,
         _firebaseMessaging = firebaseMessaging ?? FirebaseMessaging.instance;
 
+  // Getter for current user (used by CoupleProvider)
+  dynamic get currentUser => null; // This is a placeholder - actual user comes from UserProvider
+
   // ... (all other methods like updateFcmToken, saveUserData, etc., remain the same) ...
   bool get _isIosWeb {
     if (kIsWeb) {
@@ -113,8 +116,8 @@ class UserRepository {
             "message": {
               "token": fcmToken,
               "notification": {
-                "title": partnerName ?? "New Message", // Use partner name as title
-                "body": messageText ?? message, // Use message text as body
+                "title": partnerName ?? "New Message",
+                "body": messageText ?? message,
               },
               "data": {
                 "partnerName": partnerName ?? "Partner",
@@ -228,10 +231,10 @@ class UserRepository {
   // Future<void> deleteLocalProfileImage(String userId) async { ... }
   
   /// Fetch User Data from Firestore
-  Future<Map<String, dynamic>?> getUserData(String userId) async {
+  Future<Map<String, dynamic>?> getUserData(String userId, {Source? source}) async {
     try {
       DocumentSnapshot userDoc =
-          await _firestore.collection('users').doc(userId).get();
+          await _firestore.collection('users').doc(userId).get(source != null ? GetOptions(source: source) : null);
 
       if (userDoc.exists) {
         return userDoc.data() as Map<String, dynamic>?;
@@ -610,5 +613,79 @@ Future<void> sendConnectionUpdate(String receiverId) async {
     }
   }
 
+  // ===========================================================================
+  // ✨ ENCRYPTION & KEY MANAGEMENT
+  // ===========================================================================
+
+  /// Get the user's encryption status ('pending', 'enabled', 'disabled')
+  Future<String> getEncryptionStatus(String userId) async {
+    try {
+      final doc = await _firestore.collection('users').doc(userId).get();
+      if (doc.exists && doc.data() != null) {
+        return doc.data()!['encryptionStatus'] as String? ?? 'pending';
+      }
+      return 'pending';
+    } catch (e) {
+      print('Error getting encryption status: $e');
+      return 'pending';
+    }
+  }
+
+  /// Update the user's encryption status
+  Future<void> setEncryptionStatus(String userId, String status) async {
+    try {
+      await _firestore.collection('users').doc(userId).update({
+        'encryptionStatus': status,
+        'lastEncryptionStatusUpdate': FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      print('Error setting encryption status: $e');
+      throw Exception('Failed to update encryption status');
+    }
+  }
+
+  /// Upload the encrypted Master Key backup
+  Future<void> uploadKeyBackup(String userId, Map<String, dynamic> encryptedBlob) async {
+    try {
+      // We store the backup in a subcollection to keep the user document light
+      // and to allow for strict security rules (e.g., create-only, no update).
+      await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('key_backup')
+          .doc('master_key')
+          .set({
+        ...encryptedBlob,
+        'createdAt': FieldValue.serverTimestamp(),
+        'version': 1,
+      });
+
+      // Automatically mark encryption as enabled once a backup is uploaded
+      await setEncryptionStatus(userId, 'enabled');
+    } catch (e) {
+      print('Error uploading key backup: $e');
+      throw Exception('Failed to upload key backup');
+    }
+  }
+
+  /// Retrieve the encrypted Master Key backup
+  Future<Map<String, dynamic>?> getKeyBackup(String userId) async {
+    try {
+      final doc = await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('key_backup')
+          .doc('master_key')
+          .get();
+
+      if (doc.exists) {
+        return doc.data();
+      }
+      return null;
+    } catch (e) {
+      print('Error getting key backup: $e');
+      return null;
+    }
+  }
 
 }

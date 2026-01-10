@@ -21,6 +21,7 @@ import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:permission_handler/permission_handler.dart';
 import 'package:provider/provider.dart';
 import 'package:qr_flutter/qr_flutter.dart';
+import 'package:share_plus/share_plus.dart';
 
 class OnboardingScreen extends StatefulWidget {
   final String email;
@@ -234,6 +235,15 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     }
   }
 
+  void _shareCode() {
+    if (_myCoupleCode != null) {
+      Share.share(
+        'Hey! Connect with me on Feelings app using my couple code: $_myCoupleCode',
+        subject: 'My Feelings Couple Code',
+      );
+    }
+  }
+
   void _scanQrCode() async {
     final code = await showDialog<String>(
       context: context,
@@ -281,6 +291,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
             backgroundColor: Colors.green,
           ),
         );
+        // Don't auto-navigate - let the user manually proceed with Continue button
       }
 
       _partnerCodeController.clear();
@@ -472,54 +483,53 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
     final colorScheme = theme.colorScheme;
     
     return FadeIn(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const SizedBox(height: 40),
-          ElasticIn(
-            // ✨ [MODIFY] Replaced the heart icon with your app icon
-            child: ClipRRect(
-              borderRadius: BorderRadius.circular(16.0), // Adds nice rounded corners
-              child: Image.asset(
-                'assets/icon/app_icon_foreground.png', // This path must be in your pubspec.yaml
-                height: 100,
-                width: 100,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 24.0),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const SizedBox(height: 40),
+            ElasticIn(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(16.0),
+                child: Image.asset(
+                  'assets/icon/app_icon_foreground.png',
+                  height: 100,
+                  width: 100,
+                ),
               ),
             ),
-          ),
-          const SizedBox(height: 30),
-          Text(
-            'Welcome to Feelings!',
-            style: theme.textTheme.displaySmall?.copyWith(
-              color: colorScheme.primary,
+            const SizedBox(height: 30),
+            Text(
+              'Welcome to Feelings!',
+              textAlign: TextAlign.center,
+              style: theme.textTheme.displaySmall?.copyWith(
+                color: colorScheme.primary,
+              ),
             ),
-          ),
-          const SizedBox(height: 20),
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 30),
-            // ✨ [MODIFY] Updated the welcome text to be more engaging
-            child: Text(
+            const SizedBox(height: 20),
+            Text(
               'Your new space to share, connect, and grow closer.\nLet\'s get your profile ready in just a few steps.',
               textAlign: TextAlign.center,
               style: theme.textTheme.bodyLarge?.copyWith(
                 color: colorScheme.onSurface.withOpacity(0.7),
               ),
             ),
-          ),
-          const SizedBox(height: 50),
-          BounceInUp(
-            child: ElevatedButton(
-              key: const Key('get_started_button'),
-              onPressed: () {
-                _pageController.nextPage(
-                  duration: const Duration(milliseconds: 500),
-                  curve: Curves.easeInOut,
-                );
-              },
-              child: const Text('Get Started'),
+            const SizedBox(height: 50),
+            BounceInUp(
+              child: ElevatedButton(
+                key: const Key('get_started_button'),
+                onPressed: () {
+                  _pageController.nextPage(
+                    duration: const Duration(milliseconds: 500),
+                    curve: Curves.easeInOut,
+                  );
+                },
+                child: const Text('Get Started'),
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -619,102 +629,129 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           child: Column(
             children: [
               const SizedBox(height: 80),
-              Text('Your Profile',
-                  style: theme.textTheme.headlineMedium
-                      ?.copyWith(color: colorScheme.primary)),
+              FadeInDown(
+                duration: const Duration(milliseconds: 600),
+                child: Text('Your Profile',
+                    style: theme.textTheme.headlineMedium
+                        ?.copyWith(color: colorScheme.primary)),
+              ),
               const SizedBox(height: 20),
-              GestureDetector(
-                onTap: _pickImage,
-                child: CircleAvatar(
-                  radius: 60,
-                  backgroundColor: colorScheme.surfaceContainerHighest,
-                  backgroundImage: newImageProvider ?? existingImageProvider,
-                  child: (newImageProvider == null && existingImageProvider == null)
-                      ? Icon(Icons.camera_alt,
-                          size: 40, color: colorScheme.onSurfaceVariant)
-                      : null,
+              ZoomIn(
+                delay: const Duration(milliseconds: 200),
+                duration: const Duration(milliseconds: 500),
+                child: GestureDetector(
+                  onTap: _pickImage,
+                  child: CircleAvatar(
+                    radius: 60,
+                    backgroundColor: colorScheme.surfaceContainerHighest,
+                    backgroundImage: newImageProvider ?? existingImageProvider,
+                    child: (newImageProvider == null && existingImageProvider == null)
+                        ? Icon(Icons.camera_alt,
+                            size: 40, color: colorScheme.onSurfaceVariant)
+                        : null,
+                  ),
                 ),
               ),
               const SizedBox(height: 30),
-              TextField(
-                controller: _nameController,
-                decoration: const InputDecoration(
-                    labelText: 'Your Name', prefixIcon: Icon(Icons.person)),
-              ),
-              const SizedBox(height: 20),
-              TextField(
-                readOnly: true,
-                decoration: InputDecoration(
-                    labelText: 'Email',
-                    prefixIcon: const Icon(Icons.email),
-                    filled: true,
-                    fillColor: colorScheme.surfaceContainerHighest.withOpacity(0.5)),
-                controller: TextEditingController(text: widget.email),
-              ),
-              const SizedBox(height: 20),
-              DropdownButtonFormField<Gender>(
-                initialValue: _selectedGender,
-                hint: const Text('Select your gender'),
-                decoration: const InputDecoration(
-                  labelText: 'Gender',
-                  prefixIcon: Icon(Icons.wc_outlined),
+              FadeInUp(
+                delay: const Duration(milliseconds: 300),
+                duration: const Duration(milliseconds: 500),
+                child: TextField(
+                  controller: _nameController,
+                  decoration: const InputDecoration(
+                      labelText: 'Your Name', prefixIcon: Icon(Icons.person)),
                 ),
-                items: Gender.values.map((gender) {
-                  return DropdownMenuItem(
-                    value: gender,
-                    child: Text(_getGenderDisplayName(gender)),
-                  );
-                }).toList(),
-                onChanged: (Gender? newValue) {
-                  setState(() {
-                    _selectedGender = newValue;
-                  });
-                },
               ),
               const SizedBox(height: 20),
-              DropdownButtonFormField<String>(
-                initialValue: _selectedLoveLanguage,
-                hint: const Text('Select your love language (Optional)'),
-                isExpanded: true,
-                decoration: const InputDecoration(
-                  labelText: 'Love Language',
-                  prefixIcon: Icon(Icons.favorite_outline),
+              FadeInUp(
+                delay: const Duration(milliseconds: 400),
+                duration: const Duration(milliseconds: 500),
+                child: TextField(
+                  readOnly: true,
+                  decoration: InputDecoration(
+                      labelText: 'Email',
+                      prefixIcon: const Icon(Icons.email),
+                      filled: true,
+                      fillColor: colorScheme.surfaceContainerHighest.withOpacity(0.5)),
+                  controller: TextEditingController(text: widget.email),
                 ),
-                items: loveLanguages.map((language) {
-                  return DropdownMenuItem(
-                    value: language,
-                    child: Text(language, overflow: TextOverflow.ellipsis),
-                  );
-                }).toList(),
-                onChanged: (String? newValue) {
-                  setState(() {
-                    _selectedLoveLanguage = newValue;
-                  });
-                },
+              ),
+              const SizedBox(height: 20),
+              FadeInUp(
+                delay: const Duration(milliseconds: 500),
+                duration: const Duration(milliseconds: 500),
+                child: DropdownButtonFormField<Gender>(
+                  initialValue: _selectedGender,
+                  hint: const Text('Select your gender'),
+                  decoration: const InputDecoration(
+                    labelText: 'Gender',
+                    prefixIcon: Icon(Icons.wc_outlined),
+                  ),
+                  items: Gender.values.map((gender) {
+                    return DropdownMenuItem(
+                      value: gender,
+                      child: Text(_getGenderDisplayName(gender)),
+                    );
+                  }).toList(),
+                  onChanged: (Gender? newValue) {
+                    setState(() {
+                      _selectedGender = newValue;
+                    });
+                  },
+                ),
+              ),
+              const SizedBox(height: 20),
+              FadeInUp(
+                delay: const Duration(milliseconds: 600),
+                duration: const Duration(milliseconds: 500),
+                child: DropdownButtonFormField<String>(
+                  initialValue: _selectedLoveLanguage,
+                  hint: const Text('Select your love language (Optional)'),
+                  isExpanded: true,
+                  decoration: const InputDecoration(
+                    labelText: 'Love Language',
+                    prefixIcon: Icon(Icons.favorite_outline),
+                  ),
+                  items: loveLanguages.map((language) {
+                    return DropdownMenuItem(
+                      value: language,
+                      child: Text(language, overflow: TextOverflow.ellipsis),
+                    );
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                    setState(() {
+                      _selectedLoveLanguage = newValue;
+                    });
+                  },
+                ),
               ),
               const SizedBox(height: 40),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                children: [
-                  OutlinedButton(
-                    onPressed: () {
-                      FocusScope.of(context).unfocus();
-                      _pageController.previousPage(
-                          duration: const Duration(milliseconds: 500),
-                          curve: Curves.easeInOut);
-                    },
-                    child: const Text('Back'),
-                  ),
-                  ElevatedButton(
-                    onPressed: () {
-                      FocusScope.of(context).unfocus();
-                      _pageController.nextPage(
-                          duration: const Duration(milliseconds: 500),
-                          curve: Curves.easeInOut);
-                    },
-                    child: const Text('Next'),
-                  ),
-                ],
+              FadeInUp(
+                delay: const Duration(milliseconds: 700),
+                duration: const Duration(milliseconds: 500),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                  children: [
+                    OutlinedButton(
+                      onPressed: () {
+                        FocusScope.of(context).unfocus();
+                        _pageController.previousPage(
+                            duration: const Duration(milliseconds: 500),
+                            curve: Curves.easeInOut);
+                      },
+                      child: const Text('Back'),
+                    ),
+                    ElevatedButton(
+                      onPressed: () {
+                        FocusScope.of(context).unfocus();
+                        _pageController.nextPage(
+                            duration: const Duration(milliseconds: 500),
+                            curve: Curves.easeInOut);
+                      },
+                      child: const Text('Next'),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -737,221 +774,259 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Text('Connect with Partner',
-                style: theme.textTheme.headlineMedium
-                    ?.copyWith(color: colorScheme.primary)),
+            FadeInDown(
+              duration: const Duration(milliseconds: 600),
+              child: Text('Connect with Partner',
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(color: colorScheme.primary)),
+            ),
             const SizedBox(height: 20),
-            if (_myCoupleCode != null && _myCoupleCode != 'ERROR') ...[
-              Card(
-                color: colorScheme.surfaceContainerHighest,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+            // Show connection success or connection form
+            if (isConnected) ...[
+              // Already connected - show success message
+              BounceInUp(
+                delay: const Duration(milliseconds: 200),
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 500),
+                  curve: Curves.easeInOut,
+                  padding: const EdgeInsets.all(20),
+                  decoration: BoxDecoration(
+                      color: Colors.green.withOpacity(0.1),
+                      borderRadius: BorderRadius.circular(20)),
                   child: Column(
                     children: [
-                      Text('Your Couple Code',
+                      ElasticIn(
+                        child: Icon(Icons.check_circle,
+                            color: Colors.green.shade700, size: 60),
+                      ),
+                      const SizedBox(height: 10),
+                      Text("You're connected with $partnerName!",
+                          textAlign: TextAlign.center,
                           style: theme.textTheme.titleMedium
-                              ?.copyWith(color: colorScheme.primary)),
-                      const SizedBox(height: 12),
+                              ?.copyWith(color: Colors.green.shade800)),
+                      const SizedBox(height: 18),
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
+                        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                         children: [
-                          SelectableText(_myCoupleCode!,
-                              style: theme.textTheme.displaySmall),
-                          IconButton(
-                              icon:
-                                  Icon(Icons.copy, color: colorScheme.primary),
-                              onPressed: _copyCode,
-                              tooltip: 'Copy'),
+                          OutlinedButton(
+                            onPressed: () => _pageController.previousPage(
+                                duration: const Duration(milliseconds: 500),
+                                curve: Curves.easeInOut),
+                            child: const Text('Back'),
+                          ),
+                          ElevatedButton(
+                            onPressed: () {
+                              _pageController.nextPage(
+                                duration: const Duration(milliseconds: 500),
+                                curve: Curves.easeInOut,
+                              );
+                            },
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.green.shade600,
+                                foregroundColor: Colors.white),
+                            child: const Text('Continue'),
+                          ),
                         ],
-                      ),
-                      const SizedBox(height: 8),
-                      QrImageView(
-                        data: _myCoupleCode!,
-                        version: QrVersions.auto,
-                        size: 120.0,
-                        eyeStyle: QrEyeStyle(
-                            eyeShape: QrEyeShape.square,
-                            color: colorScheme.onSurfaceVariant),
-                        dataModuleStyle: QrDataModuleStyle(
-                            dataModuleShape: QrDataModuleShape.square,
-                            color: colorScheme.onSurfaceVariant),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ] else if (_myCoupleCode == 'ERROR') ...[
-              Card(
-                color: colorScheme.errorContainer,
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                  child: Column(
-                    children: [
-                      Text('Your Couple Code',
-                          style: theme.textTheme.titleMedium
-                              ?.copyWith(color: colorScheme.onErrorContainer)),
-                      const SizedBox(height: 20),
-                      Icon(Icons.error_outline,
-                          color: colorScheme.error, size: 40),
-                      const SizedBox(height: 12),
-                      Text('Failed to load couple code',
-                          style: theme.textTheme.bodyMedium
-                              ?.copyWith(color: colorScheme.onErrorContainer)),
-                      const SizedBox(height: 12),
-                      ElevatedButton(
-                        onPressed: _loadMyCoupleCode,
-                        style: ElevatedButton.styleFrom(
-                            backgroundColor: colorScheme.error,
-                            foregroundColor: colorScheme.onError),
-                        child: const Text('Retry'),
                       ),
                     ],
                   ),
                 ),
               ),
             ] else ...[
-              Card(
-                child: Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
-                  child: Column(
-                    children: [
-                      Text('Your Couple Code',
-                          style: theme.textTheme.titleMedium
-                              ?.copyWith(color: colorScheme.primary)),
-                      const SizedBox(height: 20),
-                      PulsingDotsIndicator(
-                        size: 80,
-                        colors: [
-                          Theme.of(context).colorScheme.primary,
-                          Theme.of(context).colorScheme.secondary,
-                          Theme.of(context).colorScheme.onSurface,
+              // Not connected yet - show couple code and connection form
+              if (_myCoupleCode != null && _myCoupleCode != 'ERROR') ...[
+                SlideInUp(
+                  delay: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 500),
+                  child: Card(
+                    color: colorScheme.surfaceContainerHighest,
+                    child: Padding(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                      child: Column(
+                        children: [
+                          Text('Your Couple Code',
+                              style: theme.textTheme.titleMedium
+                                  ?.copyWith(color: colorScheme.primary)),
+                          const SizedBox(height: 12),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              SelectableText(_myCoupleCode!,
+                                  style: theme.textTheme.displaySmall),
+                              IconButton(
+                                  icon:
+                                      Icon(Icons.share, color: colorScheme.primary),
+                                  onPressed: _shareCode,
+                                  tooltip: 'Share'),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          ZoomIn(
+                            delay: const Duration(milliseconds: 400),
+                            child: QrImageView(
+                              data: _myCoupleCode!,
+                              version: QrVersions.auto,
+                              size: 120.0,
+                              eyeStyle: QrEyeStyle(
+                                  eyeShape: QrEyeShape.square,
+                                  color: colorScheme.onSurfaceVariant),
+                              dataModuleStyle: QrDataModuleStyle(
+                                  dataModuleShape: QrDataModuleShape.square,
+                                  color: colorScheme.onSurfaceVariant),
+                            ),
+                          ),
                         ],
                       ),
-                      const SizedBox(height: 12),
-                      Text('Generating your couple code...',
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                              color: colorScheme.onSurface.withOpacity(0.7))),
-                    ],
+                    ),
                   ),
                 ),
-              ),
-            ],
-            const SizedBox(height: 28),
-            Card(
-              child: Padding(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                        "Enter your partner's code or scan their QR code:",
-                        style: theme.textTheme.bodyMedium?.copyWith(
-                            color: colorScheme.onSurface.withOpacity(0.7))),
-                    const SizedBox(height: 14),
-                    Row(
-                      children: [
-                        Expanded(
-                            child: TextField(
-                                controller: _partnerCodeController,
-                                textCapitalization:
-                                    TextCapitalization.characters,
-                                decoration: const InputDecoration(
-                                    labelText: 'Partner Code'))),
-                        IconButton(
-                            icon: const Icon(Icons.paste),
-                            tooltip: 'Paste',
-                            onPressed: () async {
-                              final data =
-                                  await Clipboard.getData('text/plain');
-                              if (data?.text != null) {
-                                setState(() => _partnerCodeController.text =
-                                    data!.text!.trim().toUpperCase());
-                              }
-                            }),
-                        IconButton(
-                            icon: const Icon(Icons.qr_code_scanner),
-                            tooltip: 'Scan QR',
-                            onPressed: _scanQrCode),
-                      ],
+              ] else if (_myCoupleCode == 'ERROR') ...[
+                SlideInUp(
+                  delay: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 500),
+                  child: Card(
+                    color: colorScheme.errorContainer,
+                    child: Padding(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                      child: Column(
+                        children: [
+                          Text('Your Couple Code',
+                              style: theme.textTheme.titleMedium
+                                  ?.copyWith(color: colorScheme.onErrorContainer)),
+                          const SizedBox(height: 20),
+                          Icon(Icons.error_outline,
+                              color: colorScheme.error, size: 40),
+                          const SizedBox(height: 12),
+                          Text('Failed to load couple code',
+                              style: theme.textTheme.bodyMedium
+                                  ?.copyWith(color: colorScheme.onErrorContainer)),
+                          const SizedBox(height: 12),
+                          ElevatedButton(
+                            onPressed: _loadMyCoupleCode,
+                            style: ElevatedButton.styleFrom(
+                                backgroundColor: colorScheme.error,
+                                foregroundColor: colorScheme.onError),
+                            child: const Text('Retry'),
+                          ),
+                        ],
+                      ),
                     ),
-                    const SizedBox(height: 20),
-                    SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton(
-                            onPressed: _isLoading ? null : _connectUsersByCode,
-                            child: _isLoading
-                                ? SizedBox(
-                                    width: 24,
-                                    height: 24,
-                                    child: PulsingDotsIndicator(
-                                      size: 30,
-                                      colors: [
-                                        Theme.of(context).colorScheme.onPrimary,
-                                        Theme.of(context).colorScheme.onPrimary,
-                                        Theme.of(context).colorScheme.onPrimary,
-                                      ],
-                                    ),
-                                  )
-                                : const Text('Connect Partner'))),
-                    const SizedBox(height: 10),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        OutlinedButton(
-                            onPressed: () => _pageController.previousPage(
-                                duration: const Duration(milliseconds: 500),
-                                curve: Curves.easeInOut),
-                            child: const Text('Back')),
-                        TextButton(
-                            onPressed: () => _pageController.nextPage(
-                                duration: const Duration(milliseconds: 500),
-                                curve: Curves.easeInOut),
-                            child: const Text('Skip for now')),
-                      ],
-                    ),
-                  ],
+                  ),
                 ),
-              ),
-            ),
-            const SizedBox(height: 24),
-            if (isConnected) ...[
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 500),
-                curve: Curves.easeInOut,
-                padding: const EdgeInsets.all(20),
-                decoration: BoxDecoration(
-                    color: Colors.green.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(20)),
-                child: Column(
-                  children: [
-                    Icon(Icons.check_circle,
-                        color: Colors.green.shade700, size: 60),
-                    const SizedBox(height: 10),
-                    Text("You're connected with $partnerName!",
-                        textAlign: TextAlign.center,
-                        style: theme.textTheme.titleMedium
-                            ?.copyWith(color: Colors.green.shade800)),
-                    const SizedBox(height: 18),
-                    ElevatedButton(
-                      onPressed: () async {
-                        final userProvider =
-                            Provider.of<UserProvider>(context, listen: false);
-                        await userProvider.fetchUserData();
-                        if (mounted) {
-                          Navigator.pushNamedAndRemoveUntil(
-                              context, '/bottom_nav', (route) => false);
-                        }
-                      },
-                      style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.green.shade600,
-                          foregroundColor: Colors.white),
-                      child: const Text('Go to Home'),
+              ] else ...[
+                SlideInUp(
+                  delay: const Duration(milliseconds: 200),
+                  duration: const Duration(milliseconds: 500),
+                  child: Card(
+                    child: Padding(
+                      padding:
+                          const EdgeInsets.symmetric(horizontal: 24, vertical: 20),
+                      child: Column(
+                        children: [
+                          Text('Your Couple Code',
+                              style: theme.textTheme.titleMedium
+                                  ?.copyWith(color: colorScheme.primary)),
+                          const SizedBox(height: 20),
+                          PulsingDotsIndicator(
+                            size: 80,
+                            colors: [
+                              Theme.of(context).colorScheme.primary,
+                              Theme.of(context).colorScheme.secondary,
+                              Theme.of(context).colorScheme.onSurface,
+                            ],
+                          ),
+                          const SizedBox(height: 12),
+                          Text('Generating your couple code...',
+                              style: theme.textTheme.bodyMedium?.copyWith(
+                                  color: colorScheme.onSurface.withOpacity(0.7))),
+                        ],
+                      ),
                     ),
-                  ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 28),
+              FadeInUp(
+                delay: const Duration(milliseconds: 400),
+                duration: const Duration(milliseconds: 500),
+                child: Card(
+                  child: Padding(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 20, vertical: 18),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                            "Enter your partner's code or scan their QR code:",
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                                color: colorScheme.onSurface.withOpacity(0.7))),
+                        const SizedBox(height: 14),
+                        Row(
+                          children: [
+                            Expanded(
+                                child: TextField(
+                                    controller: _partnerCodeController,
+                                    textCapitalization:
+                                        TextCapitalization.characters,
+                                    decoration: const InputDecoration(
+                                        labelText: 'Partner Code'))),
+                            IconButton(
+                                icon: const Icon(Icons.paste),
+                                tooltip: 'Paste',
+                                onPressed: () async {
+                                  final data =
+                                      await Clipboard.getData('text/plain');
+                                  if (data?.text != null) {
+                                    setState(() => _partnerCodeController.text =
+                                        data!.text!.trim().toUpperCase());
+                                  }
+                                }),
+                            IconButton(
+                                icon: const Icon(Icons.qr_code_scanner),
+                                tooltip: 'Scan QR',
+                                onPressed: _scanQrCode),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+                        SizedBox(
+                            width: double.infinity,
+                            child: ElevatedButton(
+                                onPressed: _isLoading ? null : _connectUsersByCode,
+                                child: _isLoading
+                                    ? SizedBox(
+                                        width: 24,
+                                        height: 24,
+                                        child: PulsingDotsIndicator(
+                                          size: 30,
+                                          colors: [
+                                            Theme.of(context).colorScheme.onPrimary,
+                                            Theme.of(context).colorScheme.onPrimary,
+                                            Theme.of(context).colorScheme.onPrimary,
+                                          ],
+                                        ),
+                                      )
+                                    : const Text('Connect Partner'))),
+                        const SizedBox(height: 10),
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            OutlinedButton(
+                                onPressed: () => _pageController.previousPage(
+                                    duration: const Duration(milliseconds: 500),
+                                    curve: Curves.easeInOut),
+                                child: const Text('Back')),
+                            TextButton(
+                                onPressed: () => _pageController.nextPage(
+                                    duration: const Duration(milliseconds: 500),
+                                    curve: Curves.easeInOut),
+                                child: const Text('Skip for now')),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
                 ),
               ),
             ],
@@ -971,79 +1046,100 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             const SizedBox(height: 20),
-            Text('Your Location',
-                style: theme.textTheme.headlineMedium
-                    ?.copyWith(color: colorScheme.primary)),
+            FadeInDown(
+              duration: const Duration(milliseconds: 600),
+              child: Text('Your Location',
+                  style: theme.textTheme.headlineMedium
+                      ?.copyWith(color: colorScheme.primary)),
+            ),
             const SizedBox(height: 20),
-            Image.asset('assets/images/location.png', height: 150),
+            ZoomIn(
+              delay: const Duration(milliseconds: 200),
+              duration: const Duration(milliseconds: 600),
+              child: Image.asset('assets/images/location.png', height: 150),
+            ),
             const SizedBox(height: 30),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 10),
-              child: Text(
-                _hasSharedLocation && _currentPosition != null
-                    ? "We've detected your location. Your partner will be able to see how far apart you are."
-                    : _locationPermissionGranted
-                        ? "Tap 'Share My Location' to share your distance with your partner."
-                        : "Allow location permission to share your distance with your partner.",
-                textAlign: TextAlign.center,
-                style: theme.textTheme.bodyLarge
-                    ?.copyWith(color: colorScheme.onSurface.withOpacity(0.7)),
+            FadeInUp(
+              delay: const Duration(milliseconds: 400),
+              duration: const Duration(milliseconds: 500),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 10),
+                child: Text(
+                  _hasSharedLocation && _currentPosition != null
+                      ? "We've detected your location. Your partner will be able to see how far apart you are."
+                      : _locationPermissionGranted
+                          ? "Tap 'Share My Location' to share your distance with your partner."
+                          : "Allow location permission to share your distance with your partner.",
+                  textAlign: TextAlign.center,
+                  style: theme.textTheme.bodyLarge
+                      ?.copyWith(color: colorScheme.onSurface.withOpacity(0.7)),
+                ),
               ),
             ),
             const SizedBox(height: 20),
             if (_currentPosition != null && _hasSharedLocation)
-              Text(
-                "Lat: ${_currentPosition!.latitude.toStringAsFixed(4)}, Lng: ${_currentPosition!.longitude.toStringAsFixed(4)}",
-                style: theme.textTheme.bodySmall
-                    ?.copyWith(color: colorScheme.onSurface.withOpacity(0.7)),
+              FadeIn(
+                child: Text(
+                  "Lat: ${_currentPosition!.latitude.toStringAsFixed(4)}, Lng: ${_currentPosition!.longitude.toStringAsFixed(4)}",
+                  style: theme.textTheme.bodySmall
+                      ?.copyWith(color: colorScheme.onSurface.withOpacity(0.7)),
+                ),
               ),
             const SizedBox(height: 30),
-            ElevatedButton(
-              onPressed: _isLoading
-                  ? null
-                  : () async {
-                      if (!_locationPermissionGranted) {
-                        await _requestPermissionAndShareLocation();
-                      } else {
-                        await _getCurrentLocation();
-                      }
-                    },
-              child: _isLoading
-                  ? SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: PulsingDotsIndicator(
-                        size: 30,
-                        colors: [
-                          Theme.of(context).colorScheme.onPrimary,
-                          Theme.of(context).colorScheme.onPrimary,
-                          Theme.of(context).colorScheme.onPrimary,
-                        ],
-                      ),
-                    )
-                  : Text(!_locationPermissionGranted
-                      ? 'Allow Location'
-                      : (_hasSharedLocation
-                          ? 'Refresh Location'
-                          : 'Share My Location')),
+            FadeInUp(
+              delay: const Duration(milliseconds: 500),
+              duration: const Duration(milliseconds: 500),
+              child: ElevatedButton(
+                onPressed: _isLoading
+                    ? null
+                    : () async {
+                        if (!_locationPermissionGranted) {
+                          await _requestPermissionAndShareLocation();
+                        } else {
+                          await _getCurrentLocation();
+                        }
+                      },
+                child: _isLoading
+                    ? SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: PulsingDotsIndicator(
+                          size: 30,
+                          colors: [
+                            Theme.of(context).colorScheme.onPrimary,
+                            Theme.of(context).colorScheme.onPrimary,
+                            Theme.of(context).colorScheme.onPrimary,
+                          ],
+                        ),
+                      )
+                    : Text(!_locationPermissionGranted
+                        ? 'Allow Location'
+                        : (_hasSharedLocation
+                            ? 'Refresh Location'
+                            : 'Share My Location')),
+              ),
             ),
             const SizedBox(height: 20),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-              children: [
-                OutlinedButton(
-                  onPressed: () => _pageController.previousPage(
-                      duration: const Duration(milliseconds: 500),
-                      curve: Curves.easeInOut),
-                  child: const Text('Back'),
-                ),
-                ElevatedButton(
-                  onPressed: () => _pageController.nextPage(
-                      duration: const Duration(milliseconds: 500),
-                      curve: Curves.easeInOut),
-                  child: const Text('Next'),
-                ),
-              ],
+            FadeInUp(
+              delay: const Duration(milliseconds: 600),
+              duration: const Duration(milliseconds: 500),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                children: [
+                  OutlinedButton(
+                    onPressed: () => _pageController.previousPage(
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeInOut),
+                    child: const Text('Back'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => _pageController.nextPage(
+                        duration: const Duration(milliseconds: 500),
+                        curve: Curves.easeInOut),
+                    child: const Text('Next'),
+                  ),
+                ],
+              ),
             ),
           ],
         ),
@@ -1063,18 +1159,24 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
           const SizedBox(height: 20),
-          Text('How Are You Feeling?',
-              style: theme.textTheme.headlineMedium
-                  ?.copyWith(color: colorScheme.primary)),
+          FadeInDown(
+            duration: const Duration(milliseconds: 600),
+            child: Text('How Are You Feeling?',
+                style: theme.textTheme.headlineMedium
+                    ?.copyWith(color: colorScheme.primary)),
+          ),
           const SizedBox(height: 20),
-          FadeIn(
+          ZoomIn(
+            delay: const Duration(milliseconds: 200),
+            duration: const Duration(milliseconds: 500),
             child: Column(
               children: [
                 Text('Selected:',
                     style: theme.textTheme.bodyLarge
                         ?.copyWith(color: colorScheme.onSurface.withOpacity(0.7))),
                 const SizedBox(height: 10),
-                Container(
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 300),
                   padding:
                       const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
                   decoration: BoxDecoration(
@@ -1092,75 +1194,87 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
               ],
             ),
           ),
-          SizedBox(
-            height: 80,
-            child: PageView.builder(
-              controller: moodPageController,
-              onPageChanged: (index) =>
-                  setState(() => _selectedMood = _moods[index]),
-              itemCount: _moods.length,
-              itemBuilder: (context, index) {
-                final mood = _moods[index];
-                final isSelected = _selectedMood == mood;
-                return Center(
-                  child: GestureDetector(
-                    onTap: () {
-                      setState(() => _selectedMood = mood);
-                      moodPageController.animateToPage(index,
-                          duration: const Duration(milliseconds: 300),
-                          curve: Curves.easeInOut);
-                    },
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 300),
-                      curve: Curves.easeInOut,
-                      padding: const EdgeInsets.all(8),
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        color: isSelected
-                            ? _moodColors[mood]!.withOpacity(0.4)
-                            : Colors.transparent,
-                        border: isSelected
-                            ? Border.all(color: _moodColors[mood]!, width: 2)
-                            : null,
-                      ),
-                      child: Text(
-                        _moodEmojis[mood]!,
-                        style: TextStyle(fontSize: isSelected ? 48 : 36),
+          SlideInUp(
+            delay: const Duration(milliseconds: 400),
+            duration: const Duration(milliseconds: 500),
+            child: SizedBox(
+              height: 80,
+              child: PageView.builder(
+                controller: moodPageController,
+                onPageChanged: (index) =>
+                    setState(() => _selectedMood = _moods[index]),
+                itemCount: _moods.length,
+                itemBuilder: (context, index) {
+                  final mood = _moods[index];
+                  final isSelected = _selectedMood == mood;
+                  return Center(
+                    child: GestureDetector(
+                      onTap: () {
+                        setState(() => _selectedMood = mood);
+                        moodPageController.animateToPage(index,
+                            duration: const Duration(milliseconds: 300),
+                            curve: Curves.easeInOut);
+                      },
+                      child: AnimatedContainer(
+                        duration: const Duration(milliseconds: 300),
+                        curve: Curves.easeInOut,
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          shape: BoxShape.circle,
+                          color: isSelected
+                              ? _moodColors[mood]!.withOpacity(0.4)
+                              : Colors.transparent,
+                          border: isSelected
+                              ? Border.all(color: _moodColors[mood]!, width: 2)
+                              : null,
+                        ),
+                        child: AnimatedScale(
+                          scale: isSelected ? 1.0 : 0.8,
+                          duration: const Duration(milliseconds: 200),
+                          child: Text(
+                            _moodEmojis[mood]!,
+                            style: TextStyle(fontSize: isSelected ? 48 : 36),
+                          ),
+                        ),
                       ),
                     ),
-                  ),
-                );
-              },
+                  );
+                },
+              ),
             ),
           ),
           const SizedBox(height: 40),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              OutlinedButton(
-                onPressed: () => _pageController.previousPage(
-                    duration: const Duration(milliseconds: 500),
-                    curve: Curves.easeInOut),
-                child: const Text('Back'),
-              ),
-              ElevatedButton(
-                onPressed: _completeOnboarding,
-                child: _isLoading
-                    ? SizedBox(
-                        width: 20,
-                        height: 20,
-                        child: PulsingDotsIndicator(
-                          size: 10,
-                          colors: [
-                            Theme.of(context).colorScheme.onPrimary,
-                            Theme.of(context).colorScheme.onPrimary,
-                            Theme.of(context).colorScheme.onPrimary,
-                          ],
-                        ),
-                      )
-                    : const Text('Finish'),
-              ),
-            ],
+          FadeInUp(
+            delay: const Duration(milliseconds: 600),
+            duration: const Duration(milliseconds: 500),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                OutlinedButton(
+                  onPressed: () => _pageController.previousPage(
+                      duration: const Duration(milliseconds: 500),
+                      curve: Curves.easeInOut),
+                  child: const Text('Back'),
+                ),
+                ElevatedButton(
+                  onPressed: _completeOnboarding,
+                  child: _isLoading
+                      ? SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: PulsingDotsIndicator(
+                            size: 10,
+                            colors: [
+                              Theme.of(context).colorScheme.onPrimary,
+                              Theme.of(context).colorScheme.onPrimary,
+                              Theme.of(context).colorScheme.onPrimary,
+                            ],
+                          ),
+                        )
+                      : const Text('Finish'),
+                ),
+              ],
+            ),
           ),
         ],
       ),

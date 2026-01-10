@@ -6,14 +6,12 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:flutter/material.dart';
 
-
-
 class AuthService {
   final FirebaseAuth _firebaseAuth = FirebaseAuth.instance;
   late final GoogleSignIn _googleSignIn;
   final UserRepository _userRepository = UserRepository();
-   UserRepository get userRepository => _userRepository;
-   static bool isTestMode = false;
+  UserRepository get userRepository => _userRepository;
+  static bool isTestMode = false;
 
   AuthService() {
     // Initialize Google Sign-In with platform-specific configuration
@@ -29,7 +27,7 @@ class AuthService {
     }
   }
 
-    // ✨ **[NEW]** Securely deletes the current user after re-authenticating them.
+  // ✨ Securely deletes the current user after re-authenticating them.
   Future<void> deleteUserAccount(String password) async {
     try {
       final user = _firebaseAuth.currentUser;
@@ -43,36 +41,29 @@ class AuthService {
         password: password,
       );
 
-      // 2. Re-authenticate the user to confirm their identity. This is a critical security step.
+      // 2. Re-authenticate the user to confirm their identity.
       await user.reauthenticateWithCredential(cred);
 
       // 3. If re-authentication is successful, delete the user.
       await user.delete();
-      
     } on FirebaseAuthException catch (e) {
       // Handle specific Firebase errors with user-friendly messages.
       if (e.code == 'wrong-password' || e.code == 'invalid-credential') {
         throw Exception('Incorrect password. Please try again.');
       } else if (e.code == 'requires-recent-login') {
-        throw Exception('This action is sensitive and requires a recent login. Please log out and log back in before trying again.');
+        throw Exception(
+            'This action is sensitive and requires a recent login. Please log out and log back in before trying again.');
       } else {
         throw Exception('An error occurred during re-authentication.');
       }
     } catch (e, stack) {
       try {
         // FirebaseCrashlytics.instance.recordError(e, stack, reason: 'AuthService.deleteUserAccount failed');
-        // FirebaseCrashlytics.instance.log('AuthService deleteUserAccount error: ${e.toString()}');
         print("please remove the comment before production");
       } catch (_) {}
       throw Exception('Failed to delete account: ${e.toString()}');
     }
   }
-
-
-
-
-
-
 
   // Login with Email and Password
   Future<User?> login(String email, String password) async {
@@ -81,21 +72,17 @@ class AuthService {
         email: email,
         password: password,
       );
-      
+
       User? user = userCredential.user;
       if (user != null) {
         // Set FCM token for the logged-in user
         NotificationService.setCurrentUserId(user.uid);
-
         return user;
       } else {
         throw Exception('Login failed: No user returned from Firebase');
       }
     } catch (e, stack) {
-      // Convert Firebase Auth errors to user-friendly messages
       try {
-        // FirebaseCrashlytics.instance.recordError(e, stack, reason: 'AuthService.login failed for $email');
-        // FirebaseCrashlytics.instance.log('Login error for $email: ${e.toString()}');
         print('please remove the comment before production');
       } catch (_) {}
       String errorMessage = e.toString();
@@ -129,14 +116,21 @@ class AuthService {
 
       if (user != null) {
         // **[MODIFICATION START]**
-        // 1. First, update the user's profile with their name.
-        await user.updateProfile(displayName: name);
+        
+        // 1. Update the user's profile with their name.
+        // ✨ Added try-catch to safely ignore the emulator's "photoURL must be string" error.
+        try {
+           await user.updateProfile(displayName: name);
+        } catch (e) {
+           debugPrint("⚠️ [AuthService] Warning: Failed to set displayName on Auth User (likely Emulator issue). Continuing...");
+           debugPrint("⚠️ [AuthService] Error details: $e");
+        }
 
-        // 2. THEN, send the verification email. Now %DISPLAY_NAME% will work.
+        // 2. THEN, send the verification email.
         try {
           await user.sendEmailVerification();
         } catch (e) {
-          print('Failed to send verification email: $e');
+          debugPrint('Failed to send verification email: $e');
         }
         // **[MODIFICATION END]**
 
@@ -144,12 +138,12 @@ class AuthService {
         await _userRepository.saveUserData(
           userId: user.uid,
           email: email,
-          name: name, // This saves to your database, which is correct.
+          name: name,
         );
-        
+
         // Set FCM token for the new user
         NotificationService.setCurrentUserId(user.uid);
-        
+
         return user;
       } else {
         throw Exception('Registration failed: No user returned from Firebase');
@@ -157,12 +151,10 @@ class AuthService {
     } catch (e, stack) {
       try {
         if (!isTestMode) {
-        // await FirebaseCrashlytics.instance.recordError(e, stack);
-        // await FirebaseCrashlytics.instance.log('Registration failed');
-        print("please remove the comment before production");
-      }
+          print("please remove the comment before production");
+        }
       } catch (_) {}
-      // ... (your existing error handling)
+      
       String errorMessage = e.toString();
       if (errorMessage.contains('email-already-in-use')) {
         throw Exception('An account with this email already exists. Please login instead.');
@@ -178,139 +170,116 @@ class AuthService {
     }
   }
 
-// Google Sign-In
-// In AuthService class
-Future<User?> signInWithGoogle() async {
-  GoogleSignInAccount? googleUser;
-  try {
-    await _googleSignIn.signOut(); // force account picker every time
-    googleUser = await _googleSignIn.signIn();
-    if (googleUser == null) {
-      throw Exception('Google sign-in was cancelled');
-    }
-    final googleAuth = await googleUser.authentication;
-    final credential = GoogleAuthProvider.credential(
-      accessToken: googleAuth.accessToken,
-      idToken: googleAuth.idToken,
-    );
-
-    final userCred = await _firebaseAuth.signInWithCredential(credential);
-    return userCred.user;
-  } on FirebaseAuthException catch (e) {
-    if (e.code == 'account-exists-with-different-credential') {
-      final email = googleUser?.email ?? '';
-      final methods = email.isNotEmpty
-          ? await _firebaseAuth.fetchSignInMethodsForEmail(email)
-          : const <String>[];
-      final method = methods.isNotEmpty ? methods.first : 'unknown';
-      throw Exception('account-exists-with-different-credential|email=$email|method=$method');
-    }
-    throw Exception('Google Sign-In failed: ${e.message ?? e.code}');
-  } catch (e) {
-    throw Exception('Google Sign-In failed: ${e.toString()}');
-  }
-}
-
-
-  // Logout
- /// Logout - FIXED to properly await all operations
-Future<void> logout() async {
-  // --- DEBUG LOG ---
-  debugPrint('[4] AuthService: Starting logout process...');
-  
-  try {
-    final user = _firebaseAuth.currentUser;
-    
-    // --- DEBUG LOG ---
-    debugPrint('[4a] AuthService: Current user is ${user?.uid}.');
-
-    // 1. Clean up FCM token first while the user is still authenticated.
-    if (user != null) {
-      try {
-        // --- DEBUG LOG ---
-        debugPrint('[4b] AuthService: Removing FCM token for user ${user.uid}.');
-        await NotificationService.removeFcmTokenForUser(user.uid);
-        NotificationService.clearCurrentUserId();
-        debugPrint('[4c] AuthService: FCM token cleanup successful.');
-      } catch (e) {
-        // --- DEBUG LOG ---
-        debugPrint('[WARNING] AuthService: Error during FCM cleanup, but continuing logout. Error: $e');
+  // Google Sign-In
+  Future<User?> signInWithGoogle() async {
+    GoogleSignInAccount? googleUser;
+    try {
+      await _googleSignIn.signOut(); // force account picker every time
+      googleUser = await _googleSignIn.signIn();
+      if (googleUser == null) {
+        throw Exception('Google sign-in was cancelled');
       }
-    }
+      final googleAuth = await googleUser.authentication;
+      final credential = GoogleAuthProvider.credential(
+        accessToken: googleAuth.accessToken,
+        idToken: googleAuth.idToken,
+      );
 
-    // 2. Sign out from Google Sign-In (if applicable).
-    try {
-      // --- DEBUG LOG ---
-      debugPrint('[4d] AuthService: Attempting to sign out from Google...');
-      await _googleSignIn.signOut();
-      debugPrint('[4e] AuthService: Google sign out successful.');
+      final userCred = await _firebaseAuth.signInWithCredential(credential);
+      return userCred.user;
+    } on FirebaseAuthException catch (e) {
+      if (e.code == 'account-exists-with-different-credential') {
+        final email = googleUser?.email ?? '';
+        final methods = email.isNotEmpty
+            ? await _firebaseAuth.fetchSignInMethodsForEmail(email)
+            : const <String>[];
+        final method = methods.isNotEmpty ? methods.first : 'unknown';
+        throw Exception(
+            'account-exists-with-different-credential|email=$email|method=$method');
+      }
+      throw Exception('Google Sign-In failed: ${e.message ?? e.code}');
     } catch (e) {
-      // --- DEBUG LOG ---
-      debugPrint('[WARNING] AuthService: Error signing out of Google, but continuing logout. Error: $e');
+      throw Exception('Google Sign-In failed: ${e.toString()}');
     }
-
-    // 3. Sign out from Firebase Authentication (the most critical step).
-    // --- DEBUG LOG ---
-    debugPrint('[4f] AuthService: Signing out from FirebaseAuth...');
-    await _firebaseAuth.signOut();
-    
-    // --- DEBUG LOG ---
-    debugPrint('[5] AuthService: FirebaseAuth signOut() completed. Auth state will now change.');
-
-  } catch (e, stack) {
-    // --- DEBUG LOG ---
-    debugPrint('[FATAL] AuthService: An unexpected error occurred during logout: $e');
-    FirebaseCrashlytics.instance.recordError(e, stack, reason: 'AuthService.logout failed');
-    // Re-throw the exception so the UI can be notified.
-    throw Exception('Failed to logout: $e');
   }
-}
 
+  // Logout - FIXED to properly await all operations
+  Future<void> logout() async {
+    debugPrint('[4] AuthService: Starting logout process...');
 
-// In AuthService class
-Future<void> sendVerificationEmail() async {
-  try {
-    final user = _firebaseAuth.currentUser;
-    if (user != null && !user.emailVerified) {
-      await user.sendEmailVerification();
-    }
-  } catch (e, stack) {
     try {
-      // FirebaseCrashlytics.instance.recordError(e, stack, reason: 'AuthService.sendVerificationEmail failed');
-      // FirebaseCrashlytics.instance.log('sendVerificationEmail error: ${e.toString()}');
-      print("please remove the comment before production");
-    } catch (_) {}
-    throw Exception('Failed to resend verification email: $e');
-  }
-}
+      final user = _firebaseAuth.currentUser;
+      debugPrint('[4a] AuthService: Current user is ${user?.uid}.');
 
- Future<void> sendPasswordResetEmail(String email) async {
+      // 1. Clean up FCM token first while the user is still authenticated.
+      if (user != null) {
+        try {
+          debugPrint('[4b] AuthService: Removing FCM token for user ${user.uid}.');
+          await NotificationService.removeFcmTokenForUser(user.uid);
+          NotificationService.clearCurrentUserId();
+          debugPrint('[4c] AuthService: FCM token cleanup successful.');
+        } catch (e) {
+          debugPrint('[WARNING] AuthService: Error during FCM cleanup, but continuing logout. Error: $e');
+        }
+      }
+
+      // 2. Sign out from Google Sign-In (if applicable).
+      try {
+        debugPrint('[4d] AuthService: Attempting to sign out from Google...');
+        await _googleSignIn.signOut();
+        debugPrint('[4e] AuthService: Google sign out successful.');
+      } catch (e) {
+        debugPrint('[WARNING] AuthService: Error signing out of Google, but continuing logout. Error: $e');
+      }
+
+      // 3. Sign out from Firebase Authentication.
+      debugPrint('[4f] AuthService: Signing out from FirebaseAuth...');
+      await _firebaseAuth.signOut();
+      debugPrint('[5] AuthService: FirebaseAuth signOut() completed.');
+
+    } catch (e, stack) {
+      debugPrint('[FATAL] AuthService: An unexpected error occurred during logout: $e');
+      FirebaseCrashlytics.instance.recordError(e, stack, reason: 'AuthService.logout failed');
+      throw Exception('Failed to logout: $e');
+    }
+  }
+
+  Future<void> sendVerificationEmail() async {
+    try {
+      final user = _firebaseAuth.currentUser;
+      if (user != null && !user.emailVerified) {
+        await user.sendEmailVerification();
+      }
+    } catch (e, stack) {
+      try {
+        print("please remove the comment before production");
+      } catch (_) {}
+      throw Exception('Failed to resend verification email: $e');
+    }
+  }
+
+  Future<void> sendPasswordResetEmail(String email) async {
     try {
       await _firebaseAuth.sendPasswordResetEmail(email: email);
     } on FirebaseAuthException catch (e) {
-      // Re-throw user-friendly exceptions to be caught by the UI
       if (e.code == 'user-not-found') {
         throw Exception('No account found for that email.');
       } else if (e.code == 'invalid-email') {
         throw Exception('Please enter a valid email address.');
-      } 
-      // **[MODIFICATION]** Add a specific check for this common error
-      else if (e.code == 'operation-not-allowed') {
-        throw Exception('Password reset is not enabled for this app. Please contact support.');
-      } 
-      else {
-        // This will catch other specific Firebase errors
+      } else if (e.code == 'operation-not-allowed') {
+        throw Exception(
+            'Password reset is not enabled for this app. Please contact support.');
+      } else {
         throw Exception('An error occurred: ${e.message}');
       }
     } catch (e, stack) {
       try {
-        // FirebaseCrashlytics.instance.recordError(e, stack, reason: 'AuthService.sendPasswordResetEmail failed for $email');
-        // FirebaseCrashlytics.instance.log('sendPasswordResetEmail error for $email: ${e.toString()}');
         print("please remove the comment before production");
       } catch (_) {}
       throw Exception('An unexpected error occurred. Please try again.');
     }
   }
+
   // Get Current User
   User? get currentUser => _firebaseAuth.currentUser;
 }

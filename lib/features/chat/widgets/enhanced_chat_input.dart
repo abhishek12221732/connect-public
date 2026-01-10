@@ -13,6 +13,7 @@ import 'package:permission_handler/permission_handler.dart';
 // import 'package:flutter/services.dart'; // No longer needed
 import 'dart:async';
 
+
 class EnhancedChatInput extends StatefulWidget {
   final TextEditingController messageController;
   final Function(String text, File? image) onSend; // Correct signature
@@ -42,7 +43,10 @@ class EnhancedChatInput extends StatefulWidget {
     required this.currentUserId,
     required this.partnerName,
     required this.onSendVoice,
+    this.focusNode, // ✨ Add this
   });
+
+  final FocusNode? focusNode; // ✨ Add this
 
   @override
   State<EnhancedChatInput> createState() => _EnhancedChatInputState();
@@ -50,6 +54,20 @@ class EnhancedChatInput extends StatefulWidget {
 
 class _EnhancedChatInputState extends State<EnhancedChatInput>
     with TickerProviderStateMixin {
+      
+  @override
+  void didUpdateWidget(EnhancedChatInput oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    // ✨ CRITICAL: If the reply message changes (or becomes null), we must force a UI update.
+    // Although 'build' uses widget.replyingToMessage directly, sometimes animations or
+    // cached sub-widgets might miss it. This ensures we react.
+    if (widget.replyingToMessage != oldWidget.replyingToMessage) {
+      debugPrint("EnhancedChatInput: didUpdateWidget replyingToMessage changed! New: ${widget.replyingToMessage?.id}");
+      setState(() {
+        // Just force a rebuild.
+      });
+    }
+  }
   
   late AnimationController _sendButtonAnimationController;
   late Animation<double> _scaleAnimation;
@@ -317,6 +335,7 @@ class _EnhancedChatInputState extends State<EnhancedChatInput>
   Widget _buildTextInputField(ColorScheme colorScheme) {
     return TextField(
       controller: widget.messageController,
+      focusNode: widget.focusNode, // ✨ Use the passed focus node
       onChanged: widget.onChanged,
       maxLines: 5,
       minLines: 1,
@@ -444,8 +463,10 @@ class _EnhancedChatInputState extends State<EnhancedChatInput>
   Widget _buildReplyPreview() {
     // ... (This function is unchanged)
     if (widget.replyingToMessage == null) {
+      // debugPrint("EnhancedChatInput: Reply preview hidden (message is null)");
       return const SizedBox.shrink();
     }
+    // debugPrint("EnhancedChatInput: Showing reply preview for ${widget.replyingToMessage!.id}");
 
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;

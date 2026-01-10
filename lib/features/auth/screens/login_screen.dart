@@ -375,6 +375,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                           ),
                         ),
                       TextField(
+                        key: const Key('login_email_field'),
                         controller: _emailController,
                         keyboardType: TextInputType.emailAddress,
                         textInputAction: TextInputAction.next,
@@ -398,6 +399,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                       // ✨ [MODIFY] Reduced spacing
                       const SizedBox(height: 12),
                       TextField(
+                        key: const Key('login_password_field'),
                         controller: _passwordController,
                         obscureText: _obscurePassword,
                         textInputAction: TextInputAction.done,
@@ -408,6 +410,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                           prefixIcon: Icon(Icons.lock, color: colorScheme.primary),
                           errorText: !_passwordValid && _passwordController.text.isNotEmpty ? 'Password must be at least 6 characters' : null,
                           suffixIcon: IconButton(
+                            key: const Key('login_password_visibility_button'),
                             icon: Icon(
                               _obscurePassword ? Icons.visibility_off : Icons.visibility,
                               color: colorScheme.onSurface.withOpacity(0.6),
@@ -424,6 +427,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                       Align(
                         alignment: Alignment.centerRight,
                         child: TextButton(
+                          key: const Key('login_forgot_password_button'),
                           onPressed: _showForgotPasswordDialog,
                           child: const Text('Forgot Password?'),
                         ),
@@ -434,6 +438,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                         width: double.infinity,
                         height: 52,
                         child: ElevatedButton(
+                          key: const Key('login_button'),
                           onPressed: (_isLoginButtonEnabled && !_isLoading) ? _loginUser : null,
                           style: ElevatedButton.styleFrom(
                             padding: const EdgeInsets.symmetric(vertical: 16),
@@ -457,6 +462,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                         width: double.infinity,
                         height: 52,
                         child: OutlinedButton.icon(
+                          key: const Key('login_google_signin_button'),
                           onPressed: _isLoading ? null : _handleGoogleSignIn,
                           icon: Image.asset('assets/images/google_logo.png', height: 22),
                           label: const Text('Sign in with Google'),
@@ -476,6 +482,7 @@ class _LoginScreenState extends State<LoginScreen> with SingleTickerProviderStat
                 Padding(
                   padding: const EdgeInsets.only(top: 12),
                   child: TextButton(
+                    key: const Key('login_register_navigation_button'),
                     onPressed: () {
                       Navigator.pushNamed(context, '/register');
                     },

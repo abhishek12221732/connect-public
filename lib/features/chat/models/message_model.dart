@@ -1,50 +1,43 @@
-import 'package:hive/hive.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/foundation.dart';
+import 'package:feelings/services/encryption_service.dart';
 
-part 'message_model.g.dart';
 
-@HiveType(typeId: 0)
 class MessageModel {
-  @HiveField(0)
   final String id;
 
-  @HiveField(1)
   final String senderId;
 
-  @HiveField(2)
   final String receiverId;
 
-  @HiveField(3)
   final String content;
   
-  @HiveField(4)
   final DateTime timestamp;
   
-  @HiveField(5)
   final String status;
 
-  @HiveField(6)
   final List<String> participants;
 
-  @HiveField(7)
   final String? repliedToMessageId;
 
-  @HiveField(8)
   final String? repliedToMessageContent;
 
-  @HiveField(9)
   final String? repliedToSenderName;
   
   // --- NEW FIELD ---
-  @HiveField(10)
   final String? repliedToSenderId;
   // --- END NEW ---
-  @HiveField(11)
   final DateTime? editedAt;
 
-  @HiveField(12)
   final int? editCount;
+
+final String? ciphertext;
+
+final String? nonce;
+
+final String? mac; // Authentication tag
+
+final int? encryptionVersion; // 1 = Encrypted, null = Old Plaintext
 
   // ✨ NEW Reply fields for images
   final String? repliedToMessageType; // 'text' or 'image'
@@ -57,6 +50,17 @@ class MessageModel {
   final String? audioUrl;
   final double? audioDuration;
   final String? localAudioPath;
+  
+  // ✨ NEW: Audio Encryption Fields
+  final String? audioGlobalOtk; // Encrypted OTK (using CMK)
+
+  final String? audioNonce; // Nonce used for the file itself
+
+  final int? audioEncryptionVersion; // 1 = Encrypted
+
+  final String? audioOtkNonce; // Nonce used to encrypt the OTK
+
+  final String? audioOtkMac; // MAC for the OTK
 
   MessageModel({
     required this.id,
@@ -81,6 +85,15 @@ class MessageModel {
     this.audioUrl,
     this.audioDuration,
     this.localAudioPath,
+    this.ciphertext,
+    this.encryptionVersion,
+    this.nonce,
+    this.mac,
+    this.audioGlobalOtk,
+    this.audioNonce,
+    this.audioEncryptionVersion,
+    this.audioOtkNonce,
+    this.audioOtkMac,
   });
 
   Map<String, dynamic> toMap() {
@@ -104,35 +117,81 @@ class MessageModel {
       'googleDriveImageId': googleDriveImageId,
       'audioUrl': audioUrl,
       'audioDuration': audioDuration,
+      'ciphertext': ciphertext,
+'nonce': nonce,
+'mac': mac,
+      'encryptionVersion': encryptionVersion,
+      'audioGlobalOtk': audioGlobalOtk,
+      'audioNonce': audioNonce,
+      'audioEncryptionVersion': audioEncryptionVersion,
+      'audioOtkNonce': audioOtkNonce,
+      'audioOtkMac': audioOtkMac,
     };
   }
 
 
   factory MessageModel.fromDocument(DocumentSnapshot doc) {
     Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
+    
+    DateTime parseTimestamp(dynamic timestamp) {
+      if (timestamp is Timestamp) return timestamp.toDate();
+      if (timestamp is String) return DateTime.tryParse(timestamp) ?? DateTime.now();
+      if (timestamp is DateTime) return timestamp;
+      return DateTime.now();
+    }
+
+    DateTime? parseEditedAt(dynamic v) {
+      if (v is Timestamp) return v.toDate();
+      if (v is String) return DateTime.tryParse(v);
+      return null;
+    }
+
+    String status = data['status'] ?? 'unknown';
+    // ✨ Handle Offline/Optimistic State
+    // If the document has pending writes, it hasn't reached the server yet.
+    // We visually treat 'sent' as 'unsent' (clock icon) until confirmed.
+    if (doc.metadata.hasPendingWrites && status == 'sent') {
+      status = 'unsent';
+    }
+
     return MessageModel(
       id: doc.id,
       senderId: data['senderId'] ?? '',
       receiverId: data['receiverId'] ?? '',
       content: data['content'] ?? '',
-      timestamp: (data['timestamp'] as Timestamp? ?? Timestamp.now()).toDate(),
-      status: data['status'] ?? 'unknown',
+      timestamp: parseTimestamp(data['timestamp']),
+      status: status,
       participants: List<String>.from(data['participants'] ?? []),
       repliedToMessageId: data['repliedToMessageId'],
       repliedToMessageContent: data['repliedToMessageContent'],
       repliedToSenderName: data['repliedToSenderName'],
       repliedToSenderId: data['repliedToSenderId'],
-      repliedToMessageType: data['repliedToMessageType'], // ✨ Add from map
-      repliedToImageUrl: data['repliedToImageUrl'], // ✨ Add from map
-      editedAt: (data['editedAt'] as Timestamp?)?.toDate(),
-      editCount: data['editCount'],
+      repliedToMessageType: data['repliedToMessageType'] as String?,
+      repliedToImageUrl: data['repliedToImageUrl'] as String?,
+      editedAt: parseEditedAt(data['editedAt']),
+      editCount: data['editCount'] as int?,
       messageType: data['messageType'] ?? 'text',
       googleDriveImageId: data['googleDriveImageId'],
       audioUrl: data['audioUrl'],
       audioDuration: (data['audioDuration'] as num?)?.toDouble(),
-      localImagePath: null, // Never from server
-      uploadStatus: null, // Never from server
-      localAudioPath: null, // Never from server
+      
+      // Local paths are not on server, but we can't really restore them from just a doc unless we check local storage.
+      // ChatProvider handles merging local logic.
+      localImagePath: null, 
+      uploadStatus: null, 
+      localAudioPath: null, 
+      
+      // ✨ Missing Encryption Fields Added
+      ciphertext: data['ciphertext'],
+      nonce: data['nonce'],
+      mac: data['mac'],
+      encryptionVersion: data['encryptionVersion'],
+
+      audioGlobalOtk: data['audioGlobalOtk'],
+      audioNonce: data['audioNonce'],
+      audioEncryptionVersion: data['audioEncryptionVersion'],
+      audioOtkNonce: data['audioOtkNonce'],
+      audioOtkMac: data['audioOtkMac'],
     );
   }
 
@@ -175,6 +234,15 @@ class MessageModel {
       audioDuration: (map['audioDuration'] as num?)?.toDouble(),
       localAudioPath: map['localAudioPath'] as String?,
       // ✨ --- END OF FIX --- ✨
+      ciphertext: map['ciphertext'],
+nonce: map['nonce'],
+mac: map['mac'],
+      encryptionVersion: map['encryptionVersion'],
+      audioGlobalOtk: map['audioGlobalOtk'],
+      audioNonce: map['audioNonce'],
+      audioEncryptionVersion: map['audioEncryptionVersion'],
+      audioOtkNonce: map['audioOtkNonce'],
+      audioOtkMac: map['audioOtkMac'],
     );
   }
 
@@ -201,6 +269,10 @@ class MessageModel {
      String? audioUrl,
     double? audioDuration,
     String? localAudioPath,
+    String? ciphertext,
+    String? nonce,
+    String? mac,
+    int? encryptionVersion,
   }) {
     return MessageModel(
       id: id ?? this.id,
@@ -226,6 +298,17 @@ class MessageModel {
       audioUrl: audioUrl ?? this.audioUrl,
       audioDuration: audioDuration ?? this.audioDuration,
       localAudioPath: localAudioPath ?? this.localAudioPath,
+      ciphertext: ciphertext ?? this.ciphertext,
+      nonce: nonce ?? this.nonce,
+      mac: mac ?? this.mac,
+      encryptionVersion: encryptionVersion ?? this.encryptionVersion,
+      
+      // ✨ NEW
+      audioGlobalOtk: audioGlobalOtk ?? this.audioGlobalOtk,
+      audioNonce: audioNonce ?? this.audioNonce,
+      audioEncryptionVersion: audioEncryptionVersion ?? this.audioEncryptionVersion,
+      audioOtkNonce: audioOtkNonce ?? this.audioOtkNonce,
+      audioOtkMac: audioOtkMac ?? this.audioOtkMac,
     );
   }
 
@@ -256,7 +339,13 @@ class MessageModel {
       other.uploadStatus == uploadStatus &&
       other.audioUrl == audioUrl &&
       other.audioDuration == audioDuration &&
-      other.localAudioPath == localAudioPath;
+      other.audioDuration == audioDuration &&
+      other.localAudioPath == localAudioPath &&
+      other.audioGlobalOtk == audioGlobalOtk &&
+      other.audioNonce == audioNonce &&
+      other.audioEncryptionVersion == audioEncryptionVersion &&
+      other.audioOtkNonce == audioOtkNonce &&
+      other.audioOtkMac == audioOtkMac;
   }
 
   // ✨ --- UPDATED for full equality check --- ✨
@@ -283,7 +372,12 @@ class MessageModel {
       uploadStatus.hashCode ^
       audioUrl.hashCode ^
       audioDuration.hashCode ^
-      localAudioPath.hashCode;
+      localAudioPath.hashCode ^
+      audioGlobalOtk.hashCode ^
+      audioNonce.hashCode ^
+      audioEncryptionVersion.hashCode ^
+      audioOtkNonce.hashCode ^
+      audioOtkMac.hashCode;
   }
 
   // No changes below this line
@@ -325,5 +419,27 @@ class MessageModel {
     final yesterday = DateTime(now.year, now.month, now.day - 1);
     final messageDate = DateTime(timestamp.year, timestamp.month, timestamp.day);
     return messageDate == yesterday;
+  }
+
+  /// Decrypts the content if needed. Returns original content if not encrypted.
+  Future<String> getDecryptedContent() async {
+    // Check if it's an encrypted message (Version 1)
+    if (encryptionVersion == 1 && ciphertext != null && nonce != null && mac != null) {
+      
+      // 1. Check if we even have the key yet
+      if (!EncryptionService.instance.isReady) {
+         return "⏳ Waiting for key...";
+      }
+
+      try {
+        // Use the service to decrypt
+        return await EncryptionService.instance.decryptText(ciphertext!, nonce!, mac!);
+      } catch (e) {
+        debugPrint("Error decrypting message $id: $e");
+        return "🔒 Decryption Failed"; 
+      }
+    }
+    // If it's old data or not encrypted, just return the plain content
+    return content; 
   }
 }

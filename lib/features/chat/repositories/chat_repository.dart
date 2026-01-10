@@ -6,6 +6,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_storage/firebase_storage.dart';
 import 'dart:io';
 import 'package:feelings/features/media/repository/media_repository.dart';
+import 'package:feelings/services/encryption_service.dart';
 
 
 class ChatRepository {
@@ -35,9 +36,22 @@ class ChatRepository {
   // ✨ NEW FIELDS TO ACCEPT
   String? messageType,
   String? googleDriveImageId,
+  String? ciphertext,
+    String? nonce,
+    String? mac,
+    int? encryptionVersion,
 
   String? audioUrl,
     double? audioDuration,
+    
+  // ✨ NEW: Audio Encryption Fields
+  String? audioGlobalOtk, 
+  String? audioNonce,
+  int? audioEncryptionVersion,
+  String? audioOtkNonce,
+  String? audioOtkMac,
+  
+  bool isEncryptionEnabled = false, // ✨ NEW: Respect User Preference
 }) async {
   try {
     final chatId = _getChatId(senderId, receiverId);
@@ -48,11 +62,64 @@ class ChatRepository {
         .collection('messages')
         .doc();
 
+    // ✨ ENCRYPTION LOGIC START
+      String? ciphertext;
+      String? nonce;
+      String? mac;
+      int? encryptionVersion;
+
+      // We default to sending the plaintext for now, unless encryption succeeds
+      String finalContent = content;
+      String? finalGoogleDriveImageId = googleDriveImageId;
+
+      // 1. Check if we should encrypt
+      // ✨ RULES:
+      // - Service must be ready (keys loaded)
+      // - User must have ENABLED encryption explicitly
+      if (EncryptionService.instance.isReady && isEncryptionEnabled) {
+        debugPrint("🔐 [Chat] Encryption enforced & service ready. Processing...");
+        try {
+          // CASE A: Text Message
+          if (messageType == 'text' && content.isNotEmpty) {
+             debugPrint("🔐 [Chat] Encrypting text content.");
+             final encrypted = await EncryptionService.instance.encryptText(content);
+             ciphertext = encrypted['ciphertext'];
+             nonce = encrypted['nonce'];
+             mac = encrypted['mac'];
+             encryptionVersion = 1;
+             finalContent = "🔒 Encrypted Message"; // 🔒 Set fallback for legacy clients
+          }
+          
+          // CASE B: Image Message
+          else if (messageType == 'image' && googleDriveImageId != null) {
+             debugPrint("🔐 [Chat] Encrypting image ID.");
+             // We encrypt the ID as if it were text
+             final encrypted = await EncryptionService.instance.encryptText(googleDriveImageId);
+             ciphertext = encrypted['ciphertext'];
+             nonce = encrypted['nonce'];
+             mac = encrypted['mac'];
+             encryptionVersion = 1;
+             finalGoogleDriveImageId = ""; // 🔒 Hide the ID in Firestore
+          }
+          
+        } catch (e) {
+          debugPrint("⚠️ Encryption failed, sending plaintext: $e");
+        }
+
+      } else {
+        if (!EncryptionService.instance.isReady) {
+           debugPrint("⚠️ [Chat] Encryption service is NOT ready. Sending Plaintext.");
+        } else {
+           debugPrint("⚠️ [Chat] Encryption DISABLED by user preference. Sending Plaintext.");
+        }
+      }
+      // ✨ ENCRYPTION LOGIC END
+
     final message = MessageModel(
       id: messageRef.id,
       senderId: senderId,
       receiverId: receiverId,
-      content: content,
+      content: finalContent,
       timestamp: DateTime.now(),
       status: 'sent',
       participants: [senderId, receiverId],
@@ -65,9 +132,20 @@ class ChatRepository {
 
       // ✨ PASS THE NEW DATA TO THE MODEL
       messageType: messageType ?? 'text', // Default to 'text'
-      googleDriveImageId: googleDriveImageId,
+      googleDriveImageId: finalGoogleDriveImageId,
       audioUrl: audioUrl,
       audioDuration: audioDuration,
+      ciphertext: ciphertext,
+        nonce: nonce,
+        mac: mac,
+        encryptionVersion: encryptionVersion,
+        
+      // ✨ NEW: Pass Audio Encryption Data
+      audioGlobalOtk: audioGlobalOtk,
+      audioNonce: audioNonce,
+      audioEncryptionVersion: audioEncryptionVersion,
+      audioOtkNonce: audioOtkNonce,
+      audioOtkMac: audioOtkMac,
       // localImagePath is null, as it's never saved to Firestore
     );
 
@@ -102,6 +180,72 @@ Future<String> uploadAudioToFirebaseStorage(File audioFile, String senderId, Str
   }
 }
 
+// Change signature to return a Map with metadata
+  Future<Map<String, String>> uploadSecureAudio(
+      File audioFile, 
+      String senderId, 
+      String receiverId, 
+      String messageId, {
+      bool isEncryptionEnabled = false,
+  }) async {
+    try {
+      File fileToUpload = audioFile;
+      String? encryptedOtk; // The OTK itself encrypted with the Master Key
+      String? otkNonce;
+      String? otkMac;
+      String? fileNonce; // The nonce for the audio file
+      
+      // ✨ ENCRYPT FILE IF READY AND ENABLED
+      if (EncryptionService.instance.isReady && isEncryptionEnabled) {
+        // 1. Encrypt the file itself (Generates a random OTK)
+        final result = await EncryptionService.instance.encryptFile(audioFile);
+        final plaintextOtk = result['otk']; // This is the RAW key base64
+        fileNonce = result['nonce'];
+        
+        // 2. Encrypt the OTK with the Couple Master Key
+        // So only we (and partner) can decrypt the key, and then use the key to decrypt the file.
+        final encryptedKeyMap = await EncryptionService.instance.encryptText(plaintextOtk!);
+        
+        encryptedOtk = encryptedKeyMap['ciphertext'];
+        otkNonce = encryptedKeyMap['nonce'];
+        otkMac = encryptedKeyMap['mac'];
+
+        // Write encrypted bytes to a temp file for upload
+        final tempDir = Directory.systemTemp;
+        final tempFile = File('${tempDir.path}/enc_$messageId.m4a');
+        await tempFile.writeAsBytes(result['fileBytes']);
+        
+        fileToUpload = tempFile;
+      }
+
+      // Upload (either the plain file or the encrypted temp file)
+      final chatId = _getChatId(senderId, receiverId);
+      final ref = _storage
+          .ref()
+          .child('chats')
+          .child(chatId)
+          .child('audio')
+          .child('$messageId.m4a'); // keep extension
+
+      UploadTask uploadTask = ref.putFile(fileToUpload);
+      final snapshot = await uploadTask;
+      final downloadUrl = await snapshot.ref.getDownloadURL();
+
+      // Return metadata
+      return {
+        'url': downloadUrl,
+        'audioGlobalOtk': encryptedOtk ?? '',
+        'audioNonce': fileNonce ?? '',
+        'audioOtkNonce': otkNonce ?? '',
+        'audioOtkMac': otkMac ?? '',
+        'audioEncryptionVersion': encryptedOtk != null ? '1' : '',
+      };
+    } catch (e) {
+      debugPrint("Error uploading audio: $e");
+      rethrow;
+    }
+  }
+
   // ✨ MODIFIED: Changed return type from void to StreamSubscription
   StreamSubscription listenToMessages(
   String userId,
@@ -116,14 +260,14 @@ Future<String> uploadAudioToFirebaseStorage(File audioFile, String senderId, Str
         .collection('messages')
         .where('participants', arrayContains: userId)
         .orderBy('timestamp', descending: true)
-        .snapshots()
+        .snapshots(includeMetadataChanges: true)
         .listen(
       (snapshot) async {
         try {
           List<MessageModel> messages = [];
 
           for (var doc in snapshot.docs) {
-            MessageModel msg = MessageModel.fromMap(doc.data());
+            MessageModel msg = MessageModel.fromDocument(doc);
             messages.add(msg);
           }
 
@@ -212,7 +356,7 @@ Future<String> uploadAudioToFirebaseStorage(File audioFile, String senderId, Str
           .get();
       
       return querySnapshot.docs
-          .map((doc) => MessageModel.fromMap(doc.data()))
+          .map((doc) => MessageModel.fromDocument(doc))
           .where((message) => message.content.toLowerCase().contains(query.toLowerCase()))
           .toList();
     } catch (e) {
@@ -321,9 +465,37 @@ Future<void> editMessage(
   await docRef.update({
     'content': newContent.trim(),
     'editedAt': FieldValue.serverTimestamp(),
-    if (nextEditCount != null) 'editCount': nextEditCount,
   });
 }
+
+  Future<void> updateMessageAudioData(
+    String userId,
+    String partnerId,
+    String messageId, {
+    required String audioUrl,
+    required String? audioGlobalOtk,
+    required String? audioNonce,
+    required int? audioEncryptionVersion,
+    required String? audioOtkNonce,
+    required String? audioOtkMac,
+  }) async {
+    final chatId = _getChatId(userId, partnerId);
+    final docRef = _firestore
+        .collection('chats')
+        .doc(chatId)
+        .collection('messages')
+        .doc(messageId);
+
+    await docRef.update({
+      'audioUrl': audioUrl,
+      'storageStatus': FieldValue.delete(), // Remove expired flag
+      'audioGlobalOtk': audioGlobalOtk,
+      'audioNonce': audioNonce,
+      'audioEncryptionVersion': audioEncryptionVersion,
+      'audioOtkNonce': audioOtkNonce,
+      'audioOtkMac': audioOtkMac,
+    });
+  }
 
 
   String _getChatId(String user1, String user2) {
@@ -368,7 +540,7 @@ Future<void> editMessage(
         query = query.startAfterDocument(startAfter);
       }
       final snapshot = await query.get();
-      final messages = snapshot.docs.map((doc) => MessageModel.fromMap(doc.data() as Map<String, dynamic>)).toList();
+      final messages = snapshot.docs.map((doc) => MessageModel.fromDocument(doc)).toList();
       final lastDoc = snapshot.docs.isNotEmpty ? snapshot.docs.last : null;
       return {'messages': messages, 'lastDoc': lastDoc};
     } catch (e) {
@@ -398,6 +570,69 @@ Future<void> editMessage(
       debugPrint('Marked ${messageIds.length} messages as seen in a batch');
     } catch (e) {
       debugPrint("Error in markBatchMessagesAsSeen: $e");
+    }
+  }
+
+  Future<void> migrateLegacyMessage(String userId, String partnerId, MessageModel message, {bool isEncryptionEnabled = false}) async {
+    if (!EncryptionService.instance.isReady) return;
+    if (!isEncryptionEnabled) return; // ✨ Respect preference
+  
+    // Only migrate if it's NOT already encrypted
+    if (message.encryptionVersion != null) return;
+
+    try {
+      final chatId = _getChatId(userId, partnerId);
+      final docRef = _firestore
+          .collection('chats')
+          .doc(chatId)
+          .collection('messages')
+          .doc(message.id);
+
+      String? ciphertext;
+      String? nonce;
+      String? mac;
+      
+      Map<String, dynamic> updates = {};
+
+      // ✨ Handle null messageType as 'text' for legacy messages
+      final isText = message.messageType == 'text' || message.messageType == null;
+      final isImage = message.messageType == 'image';
+
+      if (isText && message.content.isNotEmpty) {
+        final encrypted = await EncryptionService.instance.encryptText(message.content);
+        ciphertext = encrypted['ciphertext'];
+        nonce = encrypted['nonce'];
+        mac = encrypted['mac'];
+        
+        updates = {
+          'content': '', // Clear plaintext
+          'ciphertext': ciphertext,
+          'nonce': nonce,
+          'mac': mac,
+          'encryptionVersion': 1,
+        };
+      } else if (isImage && message.googleDriveImageId != null) {
+        final encrypted = await EncryptionService.instance.encryptText(message.googleDriveImageId!);
+        ciphertext = encrypted['ciphertext'];
+        nonce = encrypted['nonce'];
+        mac = encrypted['mac'];
+        
+        updates = {
+          'googleDriveImageId': '', // Clear plaintext ID
+          'ciphertext': ciphertext,
+          'nonce': nonce,
+          'mac': mac,
+          'encryptionVersion': 1,
+        };
+      }
+
+      if (updates.isNotEmpty) {
+        debugPrint("🔒 [Migration] Migrating message ${message.id} to encrypted format...");
+        await docRef.update(updates);
+      }
+
+    } catch (e) {
+      debugPrint("⚠️ [Migration] Failed to migrate message ${message.id}: $e");
     }
   }
 

@@ -1,8 +1,3 @@
-/*
-This is a special main.dart file used ONLY for integration tests.
-It configures your app to connect to the local Firebase Emulators.
-*/
-
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:firebase_core/firebase_core.dart';
@@ -12,9 +7,13 @@ import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:feelings/utils/crashlytics_helper.dart';
 import 'dart:ui';
 import 'package:flutter/foundation.dart';
-import 'dart:math';
+import 'dart:io'; // Needed for Platform check (Android Emulator)
 
-// Your App's Providers
+// ✨ [ADDED] Imports for Emulator setup
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:cloud_functions/cloud_functions.dart';
+
+// App's Providers
 import 'package:feelings/providers/user_provider.dart';
 import 'package:feelings/providers/app_status_provider.dart';
 import 'package:feelings/providers/dynamic_actions_provider.dart';
@@ -30,8 +29,13 @@ import 'package:feelings/providers/tips_provider.dart';
 import 'package:feelings/providers/date_idea_provider.dart';
 import 'package:feelings/providers/check_in_provider.dart';
 import 'package:feelings/providers/theme_provider.dart';
+import 'package:feelings/providers/rhm_detail_provider.dart';
+import 'package:feelings/providers/secret_note_provider.dart';
+import 'package:feelings/features/chat/repositories/chat_repository.dart';
+import 'package:feelings/features/media/repository/media_repository.dart';
+import 'package:feelings/features/secret_note/repositories/secret_note_repository.dart';
 
-// Your App's Screens
+// App's Screens
 import 'package:feelings/features/auth/screens/login_screen.dart';
 import 'package:feelings/features/auth/screens/register_screen.dart';
 import 'package:feelings/features/home/screens/home_screen.dart';
@@ -46,6 +50,8 @@ import 'package:feelings/features/home/screens/bottom_nav_bar.dart';
 import 'package:feelings/features/onboarding/onboarding_screen.dart';
 
 // Your App's Repositories & Services
+import 'package:feelings/features/auth/services/user_repository.dart';
+import 'package:feelings/features/auth/services/auth_service.dart';
 import 'package:feelings/features/connectCouple/repository/couple_repository.dart';
 import 'package:feelings/services/notification_services.dart';
 import 'package:feelings/features/calendar/repository/calendar_repository.dart';
@@ -54,110 +60,97 @@ import 'package:feelings/features/journal/repository/journal_repository.dart';
 import 'package:feelings/features/check_in/repository/check_in_repository.dart';
 import 'package:feelings/features/questions/repository/questions_repository.dart';
 import 'package:feelings/widgets/rhm_points_animation_overlay.dart';
-import '../lib/firebase_options.dart';
-import 'package:firebase_crashlytics/firebase_crashlytics.dart';
-import 'package:firebase_auth/firebase_auth.dart';
-import 'package:feelings/features/auth/services/auth_service.dart';
-import 'package:feelings/providers/rhm_detail_provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:feelings/utils/globals.dart';
+import 'package:feelings/services/review_service.dart';
+import 'package:feelings/services/encryption_service.dart';
+import 'package:feelings/features/encryption/widgets/encryption_setup_dialog.dart';
+import 'package:feelings/features/app_config/services/app_config_service.dart';
+import 'package:feelings/features/app_config/widgets/global_alert_wrapper.dart';
 
-
-// ✨ [NEW] Import Firestore
-import 'package:cloud_firestore/cloud_firestore.dart';
+// Other Imports
+import 'package:feelings/firebase_options.dart';
 
 final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
+@pragma('vm:entry-point')
 Future<void> _firebaseMessagingBackgroundHandler(RemoteMessage message) async {
   await Firebase.initializeApp();
 }
 
-// ✨ --- EMULATOR SETUP --- ✨
-// Set this to true when running integration tests
-const bool USE_EMULATOR = true;
-const String emulatorHost = 'localhost';
-// ✨ --- END EMULATOR SETUP --- ✨
-
-Future<void> main() async {
-  if (USE_EMULATOR) {
-    // Enable test mode to skip Crashlytics
-    AuthService.isTestMode = true;
-  }
+void main({bool isTesting = false}) async {
   await dotenv.load();
   WidgetsFlutterBinding.ensureInitialized();
-
-  SharedPreferences.setMockInitialValues({});
-  print('✅ SharedPreferences mocked FOR THE APP.');
-
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // --- ✨ CONNECT TO EMULATORS ✨ ---
-  if (USE_EMULATOR) {
-    try {
-      print('╔════════════════════════════════════════════╗');
-      print('║  🔧 USING FIREBASE EMULATORS              ║');
-      print('╚════════════════════════════════════════════╝');
-      
-      // Connect to the Auth Emulator
-      await FirebaseAuth.instance.useAuthEmulator(emulatorHost, 9099);
-      print('✅ Auth Emulator: $emulatorHost:9099');
-      
-      // Connect to the Firestore Emulator
-      FirebaseFirestore.instance.useFirestoreEmulator(emulatorHost, 8080);
-      print('✅ Firestore Emulator: $emulatorHost:8080');
-      
-      // You can add other emulators here (e.g., Functions)
-      // await FirebaseFunctions.instance.useFunctionsEmulator(emulatorHost, 5001);
+  // ✨ [EMULATOR CONFIGURATION]
+  // Set this to true to use local emulators
+  const bool useEmulators = true; 
 
-      // ✨ DISABLE CRASHLYTICS FOR TESTING
-      if (!kIsWeb) {
-        await FirebaseCrashlytics.instance.setCrashlyticsCollectionEnabled(false);
-        print('✅ Crashlytics disabled for testing');
-      }
+  if (useEmulators) {
+    // Android emulator requires '10.0.2.2' to access host machine's localhost
+    final String host = kIsWeb 
+        ? 'localhost' 
+        : (Platform.isAndroid ? '10.0.2.2' : 'localhost');
+        
+    try {
+      debugPrint('🔧 Connecting to Firebase Emulators at $host...');
       
-      print('╔════════════════════════════════════════════╗');
-      print('║  ✅ ALL EMULATORS CONNECTED               ║');
-      print('║  📊 View UI: http://127.0.0.1:4000/       ║');
-      print('╚════════════════════════════════════════════╝');
+      // Auth (Port 9099)
+      await FirebaseAuth.instance.useAuthEmulator(host, 9099);
+      
+      // Firestore (Port 8080)
+      FirebaseFirestore.instance.useFirestoreEmulator(host, 8080);
+      
+      // Functions (Port 5001)
+      FirebaseFunctions.instance.useFunctionsEmulator(host, 5001);
+      
+      debugPrint('✅ Connected to Firebase Emulators');
     } catch (e) {
-      print('╔════════════════════════════════════════════╗');
-      print('║  ❌ FAILED TO CONNECT EMULATORS           ║');
-      print('╚════════════════════════════════════════════╝');
-      print('Error: $e');
+      debugPrint('⚠️ Failed to connect to emulators: $e');
     }
-  } else {
-    // Initialize Crashlytics for production
-    await CrashlyticsHelper.initialize();
   }
 
-  // Crashlytics setup - ONLY when NOT using emulators
-  if (!kIsWeb && !USE_EMULATOR) {
-    FlutterError.onError = (errorDetails) {
-      CrashlyticsHelper.recordFlutterFatalError(errorDetails);
+  // ✨ OPTIMIZATION: Fire-and-forget or Parallelize non-critical inits
+  // We do NOT await these to unblock the UI thread aggressively.
+  
+  // 1. Start Critical Services (Parallel)
+  final initFutures = <Future>[
+     CrashlyticsHelper.initialize(),
+     EncryptionService.instance.init(),
+     NotificationService.initialize(),
+     ReviewService().init(),
+  ];
+
+  // 2. Setup Error Handling (Sync)
+  if (!kIsWeb && !isTesting) {
+    FlutterError.onError = (details) {
+      CrashlyticsHelper.recordFlutterFatalError(details);
     };
     PlatformDispatcher.instance.onError = (error, stack) {
       CrashlyticsHelper.recordError(error, stack, fatal: true);
       return true;
     };
   }
-
-
-
+  
   FirebaseMessaging.onBackgroundMessage(_firebaseMessagingBackgroundHandler);
+  NotificationService.onNotificationClick = () {
+    navigatorKey.currentState?.pushNamed('/chat');
+  };
 
-  // Conditionally initialize NotificationService
-
-    await NotificationService.initialize();
-    NotificationService.onNotificationClick = () {
-      navigatorKey.currentState?.pushNamed('/chat');
-    };
-
-
+  // 3. Theme Loading (We can start rendering with default while this loads)
   final themeProvider = ThemeProvider();
-  await themeProvider.loadThemeFromPrefs();
+  // Don't await, let it update the UI when ready.
+  themeProvider.loadThemeFromPrefs();
 
+  // 4. Run App Immediately
   runApp(MyApp(themeProvider: themeProvider));
+  
+  // 5. Cleanup Futures (Optional, just ensuring they run)
+  Future.wait(initFutures).then((_) {
+    debugPrint("🚀 [Main] Background services initialized.");
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -175,9 +168,13 @@ class MyApp extends StatelessWidget {
         Provider(create: (_) => CheckInRepository()),
         Provider(create: (_) => QuestionRepository()),
         Provider(create: (_) => CalendarRepository()),
-        Provider(create: (_) => CoupleRepository()), // <-- Moved here
+        Provider(create: (_) => CoupleRepository()),
+        Provider(create: (_) => MediaRepository()),
+        Provider(create: (_) => ChatRepository()),
+        Provider(create: (_) => SecretNoteRepository()),
 
         // --- App-wide Providers (Can now safely read repositories) ---
+        ChangeNotifierProvider(create: (_) => AppConfigService()..initialize()),
         ChangeNotifierProvider(create: (_) => UserProvider()),
         ChangeNotifierProvider(
           create: (context) => CoupleProvider(
@@ -191,6 +188,7 @@ class MyApp extends StatelessWidget {
           create: (context) => ChatProvider(
             context.read<DynamicActionsProvider>(),
             rhmRepository: context.read<RhmRepository>(),
+            chatRepository: context.read<ChatRepository>(),
           ),
         ),
         ChangeNotifierProvider(
@@ -222,9 +220,12 @@ class MyApp extends StatelessWidget {
           ),
         ),
         ChangeNotifierProvider(
-            create: (context) => BucketListProvider(context.read<DynamicActionsProvider>())),
+            create: (context) =>
+                BucketListProvider(context.read<DynamicActionsProvider>())),
         ChangeNotifierProvider(
-            create: (context) => MediaProvider(context.read<DynamicActionsProvider>())),
+            create: (context) => MediaProvider(
+                  context.read<DynamicActionsProvider>(),
+                )),
         ChangeNotifierProvider(create: (_) => TipsProvider()),
         ChangeNotifierProxyProvider<DoneDatesProvider, DateIdeaProvider>(
           create: (context) => DateIdeaProvider(
@@ -232,7 +233,8 @@ class MyApp extends StatelessWidget {
           ),
           update: (context, doneDatesProvider, dateIdeaProvider) {
             dateIdeaProvider?.updateDependencies(doneDatesProvider);
-            return dateIdeaProvider ?? DateIdeaProvider(doneDatesProvider: doneDatesProvider);
+            return dateIdeaProvider ??
+                DateIdeaProvider(doneDatesProvider: doneDatesProvider);
           },
         ),
         ChangeNotifierProvider(
@@ -248,6 +250,15 @@ class MyApp extends StatelessWidget {
             rhmRepository: context.read<RhmRepository>(),
           ),
         ),
+
+        ChangeNotifierProvider(
+          create: (context) => SecretNoteProvider(
+            mediaRepository: context.read<MediaRepository>(),
+            chatRepository: context.read<ChatRepository>(),
+            rhmRepository: context.read<RhmRepository>(),
+            secretNoteRepository: context.read<SecretNoteRepository>(),
+          ),
+        ),
       ],
       child: Center(
         child: ConstrainedBox(
@@ -261,12 +272,15 @@ class MyApp extends StatelessWidget {
 
               return MaterialApp(
                 navigatorKey: navigatorKey,
+                scaffoldMessengerKey: rootScaffoldMessengerKey,
                 title: 'Feelings App',
                 debugShowCheckedModeBanner: false,
                 theme: themeProvider.currentTheme,
                 builder: (context, child) {
-                  return RhmPointsAnimationOverlay(
-                    child: child ?? const SizedBox.shrink(),
+                  return GlobalAlertHandler(
+                    child: RhmPointsAnimationOverlay(
+                      child: child ?? const SizedBox.shrink(),
+                    ),
                   );
                 },
                 home: const AuthWrapper(),
@@ -292,7 +306,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-
 // --- AUTH WRAPPER ---
 class AuthWrapper extends StatefulWidget {
   const AuthWrapper({super.key});
@@ -304,7 +317,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
   User? _previousUser;
   bool _isCleaningUp = false;
 
-  // This stream is now persistent, which is correct.
   late final Stream<User?> _authStream;
 
   @override
@@ -313,7 +325,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
     _authStream = FirebaseAuth.instance.authStateChanges();
   }
 
- @override
+  @override
   Widget build(BuildContext context) {
     return StreamBuilder<User?>(
       stream: _authStream,
@@ -323,11 +335,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
         if (user == null && _previousUser != null && !_isCleaningUp) {
           // A logout just happened.
           _isCleaningUp = true;
-          
-          // ✨ --- THIS IS THE FIX --- ✨
-          // 1. DO NOT call context.read() here.
-          // 2. Just call the cleanup function.
-          //    We will get the context *safely* inside the post-frame callback.
+
           _performCleanupAsync();
         }
 
@@ -364,7 +372,7 @@ class _AuthWrapperState extends State<AuthWrapper> {
           final chatProvider = context.read<ChatProvider>();
           final calendarProvider = context.read<CalendarProvider>();
           final bucketListProvider = context.read<BucketListProvider>();
-          final journalProvider = context.read<JournalProvider>(); // <- Got provider
+          final journalProvider = context.read<JournalProvider>();
           final checkInProvider = context.read<CheckInProvider>();
           final dateIdeaProvider = context.read<DateIdeaProvider>();
           final doneDatesProvider = context.read<DoneDatesProvider>();
@@ -373,16 +381,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
           final rhmDetailProvider = context.read<RhmDetailProvider>();
           final tipsProvider = context.read<TipsProvider>();
           final dynamicActionsProvider = context.read<DynamicActionsProvider>();
+          final secretNoteProvider = context.read<SecretNoteProvider>();
 
-          // ✨ --- THIS IS THE FIX --- ✨
-          // 2. Clear all providers with SYNCHRONOUS clear methods FIRST.
-          // This immediately cancels all active stream listeners (Journal, Chat, etc.)
-          // before we hit any 'await'.
           coupleProvider.clear();
           chatProvider.clear();
           calendarProvider.clear();
           bucketListProvider.clear();
-          journalProvider.clear(); // <- Moved UP
+          journalProvider.clear();
           checkInProvider.clear();
           dateIdeaProvider.clear();
           doneDatesProvider.clear();
@@ -390,14 +395,13 @@ class _AuthWrapperState extends State<AuthWrapper> {
           questionProvider.clear();
           rhmDetailProvider.clear();
           tipsProvider.clear();
-           
+          secretNoteProvider.clear();
 
           // 3. NOW, await the async cleanup (which has I/O operations).
           //    It's now safe for this to pause, as all listeners are dead.
           await dynamicActionsProvider.clear();
           await userProvider.clear(); // <- Moved to the end of the line
-
-        } catch (e, stack) {
+        } catch (e) {
           // Report any errors during cleanup
           // CrashlyticsHelper.recordError(e, stack, reason: "AuthWrapper cleanup failed");
           debugPrint("AuthWrapper cleanup failed: $e");
@@ -411,7 +415,6 @@ class _AuthWrapperState extends State<AuthWrapper> {
       }
     });
   }
-
 }
 
 // --- USER DATA LOADER ---
@@ -422,6 +425,9 @@ class UserDataLoader extends StatefulWidget {
 }
 
 class _UserDataLoaderState extends State<UserDataLoader> {
+  // Flag to prevent duplicate dialogs
+  bool _isRecoveryInProgress = false;
+
   @override
   void initState() {
     super.initState();
@@ -435,6 +441,82 @@ class _UserDataLoaderState extends State<UserDataLoader> {
     });
   }
 
+  // ✨ --- NEW HELPER METHOD --- ✨
+  void _startListeners(BuildContext context) {
+    // This helper ensures listeners are only started when all data is ready.
+    // It's called from the build method, but `addPostFrameCallback` ensures
+    // it runs *after* the build is complete, preventing state errors.
+
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Ensure the context is still valid
+      if (!mounted) return;
+
+      // ✨ DEBOUNCE: If we are already running this check (or dialog is open), exit.
+      if (_isRecoveryInProgress) return;
+      _isRecoveryInProgress = true;
+
+      try {
+        debugPrint("🔍 [Main] _startListeners triggered");
+        final userProvider = context.read<UserProvider>();
+        final coupleProvider = context.read<CoupleProvider>();
+
+        final currentUserId = userProvider.currentUser?.id;
+        final coupleId = coupleProvider.coupleId;
+
+        debugPrint("🔍 [Main] UserId: $currentUserId, CoupleId: $coupleId");
+
+        if (currentUserId != null && coupleId != null) {
+          // We have all the data. Start the listener.
+          debugPrint("🔍 [Main] Attempting to load master key for couple: $coupleId");
+          final hasKey = await EncryptionService.instance.loadMasterKey(coupleId);
+          
+          if (hasKey) {
+             debugPrint("✅ Encryption Ready for Couple: $coupleId");
+          } else {
+             debugPrint("⚠️ Encryption Key Missing for Couple: $coupleId");
+             
+             // ✨ AUTO-PROMPT RECOVERY IF NEEDED
+             // Check if we *expect* to have a key (encryption enabled + backup exists)
+             try {
+               final userRepository = UserRepository();
+               final status = await userRepository.getEncryptionStatus(currentUserId);
+               debugPrint("🔍 [Main] Encryption Status for $currentUserId: $status");
+               
+               if (status == 'enabled') {
+                  final hasBackup = await userRepository.getKeyBackup(currentUserId);
+                  debugPrint("🔍 [Main] Backup found: ${hasBackup != null}");
+                  
+                  if (hasBackup != null) {
+                     debugPrint("🚨 [Main] User Enabled + Backup Exists + No Key = PROMPT RECOVERY");
+                     // NOTE: UI Prompt moved to BottomNavBar to show over App UI.
+                  } else {
+                     debugPrint("⚠️ [Main] Encryption enabled but NO BACKUP found.");
+                  }
+               } else {
+                 debugPrint("ℹ️ [Main] Encryption status is '$status', skipping prompt.");
+               }
+             } catch (e) {
+                debugPrint("⚠️ [Main] Failed to check encryption status for auto-prompt: $e");
+             }
+          }
+          if (mounted) {
+            context
+              .read<SecretNoteProvider>()
+              .listenForUnreadNotes(coupleId, currentUserId);
+          }
+        } else {
+          debugPrint("⚠️ [Main] Listener start skipped: Missing UserId or CoupleId");
+        }
+      
+      } finally {
+        // Always release the lock when done, even if errors occur.
+        if (mounted) {
+          _isRecoveryInProgress = false;
+        }
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     // ✨ [FIX] Get the Firebase Auth user *directly* to check auth state.
@@ -443,74 +525,75 @@ class _UserDataLoaderState extends State<UserDataLoader> {
 
     return Consumer2<UserProvider, CoupleProvider>(
       builder: (context, userProvider, coupleProvider, child) {
-        
-        // PATH 1: Still loading data from providers.
-        if (userProvider.isLoading || coupleProvider.isLoading) {
-          return const LoadingScreen();
-        } 
-        
-        // PATH 2: ✨ [FIX] No Firebase auth user. This means they are truly logged out.
-        // This check must come *after* the loading check.
-        else if (authUser == null) { 
-          return const LoginScreen();
-        } 
-        
-        // PATH 3: ✨ [FIX] Firebase auth user *exists*, but Firestore data (`userData`) is *null*.
-        // This is the new Google Sign-In user!
-        else if (userProvider.userData == null) {
-          // We have a logged-in user with no database entry.
-          // Send them to the RegisterScreen to "Complete Profile".
-          WidgetsBinding.instance.addPostFrameCallback((_) {
-            if (mounted) { // Guard against navigating while unmounted
-              Navigator.pushReplacementNamed(
-                context,
-                '/register',
-                arguments: authUser, // Pass the authUser object
-              );
-            }
-          });
-          // Return a loading screen while the navigation happens.
+        // PATH 1: Still loading PRIMARY data.
+        if ((userProvider.isLoading && userProvider.userData == null) ||
+            (coupleProvider.isLoading && userProvider.userData == null)) {
           return const LoadingScreen();
         }
-        
+ 
+        // PATH 2: ✨ [FIX] No Firebase auth user.
+        else if (authUser == null) {
+          return const LoginScreen();
+        }
+
+        // PATH 3: ✨ [FIX] Handle new users (Google vs Email).
+        else if (userProvider.userData == null) {
+          // Check if the user signed in with Email/Password
+          final isEmailUser = authUser.providerData.any((p) => p.providerId == 'password');
+
+          if (isEmailUser) {
+            // CASE A: Email User + No Data = Race Condition / Loading.
+            // Do NOT show RegisterScreen. Just keep loading or retry.
+            
+            // If the provider stopped loading but data is still null, force a retry.
+            if (!userProvider.isLoading) {
+               WidgetsBinding.instance.addPostFrameCallback((_) {
+                 userProvider.fetchUserData(); 
+               });
+            }
+            return const LoadingScreen();
+          } else {
+            // CASE B: Google/Apple User + No Data = Needs to Complete Profile.
+            // This is the ONLY case where we show the screen.
+            return RegisterScreen(prefilledUser: authUser);
+          }
+        }
+
         // PATH 4: ✨ [FIX] Firebase user exists AND Firestore data exists.
         // This is an existing user. Check their onboarding status.
         else {
           // This also fixes a potential crash if onboardingCompleted is null.
-          final bool hasOnboarded = userProvider.userData!['onboardingCompleted'] ?? false;
-    
+          final bool hasOnboarded =
+              userProvider.userData!['onboardingCompleted'] ?? false;
+
           if (hasOnboarded) {
             // User is fully onboarded.
+
+            // ✨ --- START THE LISTENER --- ✨
+            // We have all the data we need to start the listeners.
+            _startListeners(context);
+
             return const BottomNavBarWithFade();
           } else {
             // User is logged in but has not onboarded.
-            // Send them to Onboarding.
-            WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (mounted) { 
-                Navigator.pushReplacement(
-                  context,
-                  MaterialPageRoute(
-                    builder: (_) => OnboardingScreen(
-                      // ✨ [FIX] Safely get data, preferring Firestore data
-                      // but falling back to the auth object.
-                      email: userProvider.currentUser?.email ?? authUser.email ?? '',
-                      name: userProvider.currentUser?.name ?? authUser.displayName ?? '',
-                      // Get photoURL from userData map, fallback to authUser
-                      photoURL: userProvider.userData!['profileImageUrl'] ?? authUser.photoURL ?? '',
-                    ),
-                  ),
-                );
-              }
-            });
-            // Return a loading screen while the navigation happens.
-            return const LoadingScreen();
+            // RETURN the OnboardingScreen, DON'T navigate.
+            return OnboardingScreen(
+              // ✨ [FIX] Safely get data, preferring Firestore data
+              // but falling back to the auth object.
+              email: userProvider.currentUser?.email ?? authUser.email ?? '',
+              name:
+                  userProvider.currentUser?.name ?? authUser.displayName ?? '',
+              // Get photoURL from userData map, fallback to authUser
+              photoURL: userProvider.userData!['profileImageUrl'] ??
+                  authUser.photoURL ??
+                  '',
+            );
           }
         }
       },
     );
   }
 }
-
 
 class BottomNavBarWithFade extends StatefulWidget {
   const BottomNavBarWithFade({super.key});
@@ -579,7 +662,6 @@ class _BottomNavBarWithFadeState extends State<BottomNavBarWithFade>
   }
 }
 
-
 // ----------------------------------------------------------------------
 // SMOOTH TRANSITION WRAPPER
 // ----------------------------------------------------------------------
@@ -606,8 +688,8 @@ class _FadeScaleTransitionWrapperState extends State<FadeScaleTransitionWrapper>
   @override
   void initState() {
     super.initState();
-    _controller =
-        AnimationController(vsync: this, duration: widget.duration)..forward();
+    _controller = AnimationController(vsync: this, duration: widget.duration)
+      ..forward();
 
     _fadeAnimation = CurvedAnimation(
       parent: _controller,
@@ -637,77 +719,7 @@ class _FadeScaleTransitionWrapperState extends State<FadeScaleTransitionWrapper>
   }
 }
 
-// ----------------------------------------------------------------------
-// SMOOTH WIGGLING TEXT
-// ----------------------------------------------------------------------
-class WigglingText extends StatefulWidget {
-  final String text;
-  final TextStyle style;
-  final Duration animationDuration;
-  final double amplitude;
 
-  const WigglingText({
-    super.key,
-    required this.text,
-    required this.style,
-    this.animationDuration = const Duration(seconds: 3),
-    this.amplitude = 0.6,  // Reduced amplitude for more subtle movement
-  });
-
-  @override
-  State<WigglingText> createState() => _WigglingTextState();
-}
-
-class _WigglingTextState extends State<WigglingText>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _controller;
-  late List<double> _phaseOffsets;
-  final Random _random = Random();
-
-  @override
-  void initState() {
-    super.initState();
-
-    _controller = AnimationController(
-      vsync: this,
-      duration: widget.animationDuration,
-    )..repeat(reverse: false);
-
-    _phaseOffsets =
-        List.generate(widget.text.length, (_) => _random.nextDouble() * 2 * pi);
-  }
-
-  @override
-  void dispose() {
-    _controller.dispose();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return AnimatedBuilder(
-      animation: _controller,
-      builder: (context, child) {
-        final double t = _controller.value * 2 * pi;
-
-        return Row(
-          mainAxisSize: MainAxisSize.min,
-          children: List.generate(widget.text.length, (index) {
-            final double dx =
-                sin(t + _phaseOffsets[index]) * widget.amplitude;
-            final double dy =
-                cos(t + _phaseOffsets[index]) * widget.amplitude;
-
-            return Transform.translate(
-              offset: Offset(dx, dy),
-              child: Text(widget.text[index], style: widget.style),
-            );
-          }),
-        );
-      },
-    );
-  }
-}
 
 // ----------------------------------------------------------------------
 // LOADING SCREEN with SMOOTH WIGGLING TEXT
@@ -729,10 +741,9 @@ class LoadingScreen extends StatelessWidget {
 
     return Scaffold(
       body: Center(
-        child: WigglingText(
-          text: 'Feelings',
+        child: Text(
+          'Feelings',
           style: textStyle,
-          animationDuration: const Duration(milliseconds: 1200),
         ),
       ),
     );

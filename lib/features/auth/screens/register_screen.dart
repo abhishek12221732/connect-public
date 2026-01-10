@@ -60,7 +60,7 @@ class _RegisterScreenState extends State<RegisterScreen>
   // State to track if this is a Google sign-up flow
   bool _isGoogleSignUp = false;
   User? _googleUser;
-  StreamSubscription<User?>? _authSub;
+  // StreamSubscription<User?>? _authSub; // ✨ DELETED to fix race condition
 
   @override
   void didChangeDependencies() {
@@ -97,13 +97,10 @@ class _RegisterScreenState extends State<RegisterScreen>
   @override
   void initState() {
     super.initState();
-    _authSub = FirebaseAuth.instance.authStateChanges().listen((user) {
-      if (!mounted) return;
-      if (user != null) {
-        // User is authenticated; reveal the AuthWrapper-driven screen underneath
-        Navigator.of(context).popUntil((route) => route.isFirst);
-      }
-    });
+    // ✨ DELETED the authStateChanges listener here.
+    // It was popping the screen too early, before Firestore data was saved,
+    // causing the "Complete Profile" screen to appear.
+    
     _fadeController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 600),
@@ -127,7 +124,7 @@ class _RegisterScreenState extends State<RegisterScreen>
     _passwordController.dispose();
     _confirmPasswordController.dispose();
     _nameController.dispose();
-    _authSub?.cancel();
+    // _authSub?.cancel(); // ✨ DELETED
     super.dispose();
   }
 
@@ -318,14 +315,20 @@ class _RegisterScreenState extends State<RegisterScreen>
       }
 
       // 1. Register the user (creates auth user AND saves to Firestore)
+      // This awaits until Firestore write is complete.
       await _authService.register(
         _emailController.text.trim(),
         _passwordController.text.trim(),
         _nameController.text.trim(),
       );
 
-      // 2. DO NOTHING ELSE.
-      // The AuthWrapper will detect the new user and handle navigation.
+      // 2. ✨ [FIX] Manually pop navigation AFTER success.
+      // We explicitly removed the auth listener to prevent race conditions.
+      // Now we pop manually so the AuthWrapper underneath can take over.
+      if (mounted) {
+         Navigator.of(context).pop(); 
+      }
+      
     } catch (e, stack) {
       String errorMessage = e.toString().replaceFirst('Exception: ', '');
 
@@ -543,6 +546,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                             ),
                           ),
                         TextField(
+                          key: const Key('register_name_field'),
                           controller: _nameController,
                           textInputAction: TextInputAction.next,
                           onChanged: (_) {
@@ -562,6 +566,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                         // ✨ [MODIFY] Reduced spacing
                         const SizedBox(height: 8),
                         TextField(
+                          key: const Key('register_email_field'),
                           controller: _emailController,
                           keyboardType: TextInputType.emailAddress,
                           textInputAction: TextInputAction.next,
@@ -596,6 +601,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                           // ✨ [MODIFY] Reduced spacing
                           const SizedBox(height: 8),
                           TextField(
+                            key: const Key('register_password_field'),
                             controller: _passwordController,
                             obscureText: _obscurePassword,
                             textInputAction: TextInputAction.next,
@@ -632,6 +638,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                       ),
                                     ),
                                   IconButton(
+                                    key: const Key('register_password_visibility_button'),
                                     icon: Icon(
                                       _obscurePassword
                                           ? Icons.visibility_off
@@ -652,6 +659,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                           // ✨ [MODIFY] Reduced spacing
                           const SizedBox(height: 8),
                           TextField(
+                            key: const Key('register_confirm_password_field'),
                             controller: _confirmPasswordController,
                             obscureText: _obscureConfirmPassword,
                             textInputAction: TextInputAction.done,
@@ -687,6 +695,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                       ),
                                     ),
                                   IconButton(
+                                    key: const Key('register_confirm_password_visibility_button'),
                                     icon: Icon(
                                       _obscureConfirmPassword
                                           ? Icons.visibility_off
@@ -717,6 +726,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                                 height: 24.0,
                                 width: 24.0,
                                 child: Checkbox(
+                                  key: const Key('register_terms_checkbox'),
                                   value: _termsAccepted,
                                   onChanged: (bool? value) {
                                     setState(() {
@@ -767,6 +777,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                           width: double.infinity,
                           height: 52,
                           child: ElevatedButton(
+                            key: const Key('register_button'),
                             style: ElevatedButton.styleFrom(
                               padding: const EdgeInsets.symmetric(vertical: 16),
                               minimumSize: const Size.fromHeight(52),
@@ -799,6 +810,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                             width: double.infinity,
                             height: 52,
                             child: OutlinedButton.icon(
+                              key: const Key('register_google_signup_button'),
                               onPressed:
                                   _isLoading ? null : _handleGoogleSignIn, // ✨ [CHANGE] Call the new handler
                               icon: Image.asset('assets/images/google_logo.png',
@@ -819,6 +831,7 @@ class _RegisterScreenState extends State<RegisterScreen>
                         Padding(
                           padding: const EdgeInsets.only(top: 8),
                           child: TextButton(
+                            key: const Key('register_login_navigation_button'),
                             onPressed: _isLoading
                                 ? null
                                 : () async {

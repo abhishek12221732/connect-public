@@ -113,4 +113,26 @@ class AppTextFieldTheme {
       borderSide: const BorderSide(color: AppColors.oceanDarkPrimary, width: 2.0),
     ),
   );
+
+  // ✨ --- NEW THEMES ---
+  static final InputDecorationTheme midnightInputDecorationTheme = darkInputDecorationTheme.copyWith(
+    fillColor: AppColors.midnightSurface,
+    focusedBorder: darkInputDecorationTheme.focusedBorder?.copyWith(
+      borderSide: const BorderSide(color: AppColors.midnightPrimary, width: 2.0),
+    ),
+  );
+
+  static final InputDecorationTheme eclipseInputDecorationTheme = darkInputDecorationTheme.copyWith(
+    fillColor: AppColors.eclipseSurface,
+    focusedBorder: darkInputDecorationTheme.focusedBorder?.copyWith(
+      borderSide: const BorderSide(color: AppColors.eclipsePrimary, width: 2.0),
+    ),
+  );
+
+  static final InputDecorationTheme auroraInputDecorationTheme = darkInputDecorationTheme.copyWith(
+    fillColor: AppColors.auroraSurface,
+    focusedBorder: darkInputDecorationTheme.focusedBorder?.copyWith(
+      borderSide: const BorderSide(color: AppColors.auroraPrimary, width: 2.0),
+    ),
+  );
 }

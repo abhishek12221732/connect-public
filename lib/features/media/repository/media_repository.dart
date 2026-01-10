@@ -7,6 +7,11 @@ import 'package:path/path.dart';
 import 'dart:convert';
 import 'package:http_parser/http_parser.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart'; // ✨ Needed for SnackBar
+import 'package:feelings/utils/globals.dart';
+import 'package:feelings/services/encryption_service.dart';
+
+class GoogleAuthCancelledException implements Exception {}
 
 class MediaRepository {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
@@ -61,8 +66,20 @@ class MediaRepository {
       // 2. If silent fails, show the prompt
       account ??= await _getGoogleSignIn.signIn();
 
+      // ✨ 3. Handle Cancellation Globally
       if (account == null) {
-        throw Exception('Google sign-in was cancelled or failed.');
+        // 1. Show UI Message immediately via Global Key
+        rootScaffoldMessengerKey.currentState?.showSnackBar(
+          SnackBar(
+            content: const Text('Sign-in cancelled. Image upload requires Google Drive access.'),
+            backgroundColor: Colors.grey[800],
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 3),
+          ),
+        );
+
+        // 2. Throw specific exception to stop flow
+        throw GoogleAuthCancelledException(); 
       }
       return account;
     } catch (e) {
@@ -157,18 +174,65 @@ class MediaRepository {
 
   /// Saves media details in Firestore
   Future<void> saveMedia(
-      String coupleId, String imageId, String text, String userId) async {
+      String coupleId, String imageId, String text, String userId, {bool isEncryptionEnabled = false}) async {
     try {
-      print("Saving media for coupleId: $coupleId");
+      // ✨ ENCRYPTION START
+      String finalImageId = imageId;
+      String finalText = text;
+      String? ciphertextId;
+      String? nonceId;
+      String? macId;
+      String? ciphertextText;
+      String? nonceText;
+      String? macText;
+      int? encryptionVersion;
+      
+      print("🔒 [MediaRepo] saveMedia called. Encryption Ready? ${EncryptionService.instance.isReady}, Enabled? $isEncryptionEnabled");
+
+      if (EncryptionService.instance.isReady && isEncryptionEnabled) {
+         // 1. Encrypt Image ID
+         final encId = await EncryptionService.instance.encryptText(imageId);
+         ciphertextId = encId['ciphertext'];
+         nonceId = encId['nonce'];
+         macId = encId['mac'];
+         // finalImageId = ""; // ✨ Don't hide completely if we want to allow hybrid? 
+         // Actually, standard logic:
+         finalImageId = ""; // Hide
+         
+         // 2. Encrypt Caption (if exists)
+         if (text.isNotEmpty) {
+           final encText = await EncryptionService.instance.encryptText(text);
+           ciphertextText = encText['ciphertext'];
+           nonceText = encText['nonce'];
+           macText = encText['mac'];
+           finalText = ""; // Hide
+         }
+         
+         encryptionVersion = 1;
+      }
+      // ✨ ENCRYPTION END
+
       await _firestore
           .collection('couples')
           .doc(coupleId)
           .collection('media')
           .add({
-        'imageId': imageId,
-        'text': text,
+        'imageId': finalImageId,
+        'text': finalText,
         'createdBy': userId,
         'createdAt': Timestamp.now(),
+        
+        // Encrypted Fields for ID
+        'ciphertextId': ciphertextId,
+        'nonceId': nonceId,
+        'macId': macId,
+        
+        // Encrypted Fields for Text
+        'ciphertextText': ciphertextText,
+        'nonceText': nonceText,
+        'macText': macText,
+        
+        'encryptionVersion': encryptionVersion,
       });
       print("✅ Media saved successfully.");
     } catch (e) {
@@ -207,6 +271,66 @@ class MediaRepository {
     } catch (e) {
       print("❌ Error fetching media from Firestore: $e");
       return const Stream.empty();
+    }
+  }
+
+  // ✨ --- NEW: MIGRATION METHOD ---
+  Future<void> migrateLegacyMedia(String coupleId, String mediaId, Map<String, dynamic> data) async {
+    if (!EncryptionService.instance.isReady) return;
+    
+    // Skip if already encrypted or missing crucial data
+    if (data['encryptionVersion'] != null) return;
+    
+    // We only migrate if we have an imageId (text is optional)
+    final imageId = data['imageId'] as String?;
+    if (imageId == null || imageId.isEmpty) return; // Also check if imageId is empty string
+    final text = data['text'] as String? ?? "";
+
+    try {
+      String? ciphertextId;
+      String? nonceId;
+      String? macId; // Added macId for imageId
+      String? ciphertextText;
+      String? nonceText;
+      String? macText; // Added macId for text
+      
+      // 1. Encrypt Image ID
+      final encId = await EncryptionService.instance.encryptText(imageId);
+      ciphertextId = encId['ciphertext'];
+      nonceId = encId['nonce'];
+      macId = encId['mac']; // Assign macId
+      
+      // 2. Encrypt Text (if present)
+      if (text.isNotEmpty) {
+        final encText = await EncryptionService.instance.encryptText(text);
+        ciphertextText = encText['ciphertext'];
+        nonceText = encText['nonce'];
+        macText = encText['mac']; // Assign macId
+      }
+
+      await _firestore
+          .collection('couples')
+          .doc(coupleId)
+          .collection('media')
+          .doc(mediaId)
+          .update({
+            // Hide original data
+            'imageId': "", 
+            'text': text.isNotEmpty ? "" : "",
+            
+            // Add encrypted fields
+            'ciphertextId': ciphertextId,
+            'nonceId': nonceId,
+            'macId': macId, // Add macId to update
+            'ciphertextText': ciphertextText,
+            'nonceText': nonceText,
+            'macText': macText, // Add macId to update
+            'encryptionVersion': 1,
+          });
+          
+      print("🔒 [Migration] Memory $mediaId migrated."); // Changed debugPrint to print
+    } catch (e) {
+      print("⚠️ [Migration] Memory $mediaId failed: $e"); // Changed debugPrint to print
     }
   }
 

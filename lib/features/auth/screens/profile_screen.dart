@@ -26,20 +26,9 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
-import 'package:feelings/providers/user_provider.dart';
-import 'package:feelings/providers/couple_provider.dart';
-import 'package:feelings/providers/dynamic_actions_provider.dart';
-import 'package:feelings/providers/chat_provider.dart';
-import 'package:feelings/providers/journal_provider.dart';
-import 'package:feelings/providers/calendar_provider.dart';
-import 'package:feelings/providers/question_provider.dart';
-import 'package:feelings/providers/done_dates_provider.dart';
-import 'package:feelings/providers/bucket_list_provider.dart';
-import 'package:feelings/providers/media_provider.dart';
-import 'package:feelings/providers/tips_provider.dart';
-import 'package:feelings/providers/date_idea_provider.dart';
-import 'package:feelings/providers/check_in_provider.dart';
-import 'package:feelings/providers/rhm_detail_provider.dart';
+import 'package:feelings/services/review_service.dart';
+import 'package:feelings/services/encryption_service.dart';
+import 'package:feelings/features/encryption/widgets/encryption_setup_dialog.dart';
 
 import 'change_password_screen.dart';
 
@@ -53,9 +42,11 @@ class ProfileScreen extends StatefulWidget {
 class _ProfileScreenState extends State<ProfileScreen> {
   // --- STATE VARIABLES ---
   final TextEditingController _nameController = TextEditingController();
+  late FocusNode _nameFocusNode; // ✨ [ADDED]
   bool _isLoading = false;
   bool _isUploadingImage = false;
   bool _notificationsEnabled = true;
+  String? _email;
   AppThemeType _selectedTheme = AppThemeType.defaultLight;
   String? _currentMood;
   String? _selectedLoveLanguage;
@@ -64,6 +55,9 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void initState() {
     super.initState();
+    _nameFocusNode = FocusNode(); // ✨ [ADDED]
+    _nameFocusNode.addListener(_onNameFocusChange); // ✨ [ADDED]
+    
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadUserData();
     });
@@ -72,7 +66,46 @@ class _ProfileScreenState extends State<ProfileScreen> {
   @override
   void dispose() {
     _nameController.dispose();
+    _nameFocusNode.dispose(); // ✨ [ADDED]
     super.dispose();
+  }
+  
+  // ✨ [ADDED] Capture blur event
+  void _onNameFocusChange() {
+    if (!_nameFocusNode.hasFocus) {
+      _updateName();
+    }
+  }
+
+  // ✨ [ADDED] Specific update for name
+  void _updateName() {
+    final newName = _nameController.text.trim();
+    if (newName.isNotEmpty) {
+      _updateUserData({'name': newName});
+    }
+  }
+
+  // ✨ [ADDED] Generic Auto-Save Helper
+  Future<void> _updateUserData(Map<String, dynamic> updates) async {
+    if (!mounted) return;
+    final userProvider = Provider.of<UserProvider>(context, listen: false);
+
+    try {
+      // Optimistic local update (Provider handles this too, but we update local state for UI consistency if needed)
+      // Actually, relying on Provider notifyListeners is best.
+      
+      await userProvider.updateUserData(updates);
+      
+      // Optional: Add a subtle indicator or just remain silent.
+      // debugPrint("✅ Auto-saved: $updates"); 
+
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Failed to save changes: $e')),
+        );
+      }
+    }
   }
 
   // --- LOGIC & DATA HANDLING METHODS ---
@@ -85,6 +118,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
     if (userProvider.userData != null) {
       final userData = userProvider.userData!;
       _nameController.text = userData['name'] ?? '';
+      _email = userData['email'] ?? FirebaseAuth.instance.currentUser?.email;
       _notificationsEnabled = userData['notificationsEnabled'] ?? true;
       _currentMood = userData['mood'];
       _selectedLoveLanguage = userData['loveLanguage'];
@@ -115,12 +149,12 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _pickAndUploadImage() async {
-    debugPrint("--- 1. Starting Image Pick and Upload ---");
+    // ... (Keep existing implementation)
+     debugPrint("--- 1. Starting Image Pick and Upload ---");
 
     final userProvider = Provider.of<UserProvider>(context, listen: false);
     final user = userProvider.userData;
     if (user == null) {
-      debugPrint("--- ERROR: User data is null. Aborting. ---");
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text("Cannot upload: User not found.")));
@@ -132,33 +166,23 @@ class _ProfileScreenState extends State<ProfileScreen> {
       imageQuality: 70,
     );
 
-    if (pickedFile == null) {
-      debugPrint("--- 2. Image picking was cancelled by the user. ---");
-      return;
-    }
-    debugPrint("--- 2. Image successfully picked: ${pickedFile.path} ---");
+    if (pickedFile == null) return;
 
     setState(() => _isUploadingImage = true);
 
     try {
       Uint8List imageBytes;
       if (kIsWeb) {
-        debugPrint("--- 3. Running on WEB. Reading bytes directly. ---");
         imageBytes = await pickedFile.readAsBytes();
       } else {
-        debugPrint("--- 3. Running on MOBILE. Opening cropper... ---");
         final cropped = await cropImage(pickedFile.path, context);
         if (cropped == null) {
-          debugPrint("--- 4. Cropping was cancelled by the user. ---");
           if (mounted) setState(() => _isUploadingImage = false);
           return;
         }
-        debugPrint("--- 4. Image successfully cropped: ${cropped.path} ---");
         imageBytes = await cropped.readAsBytes();
       }
 
-      debugPrint(
-          "--- 5. Preparing to upload ${imageBytes.length} bytes to Cloudinary. ---");
       final cloudinaryHelper = CloudinaryHelper();
       final String fixedPublicId = 'profile_${user['userId']}';
 
@@ -169,17 +193,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       );
 
       if (newImageUrl == null) {
-        debugPrint("--- 6. ERROR: Cloudinary returned a null URL. ---");
-        throw Exception(
-            "Failed to upload image. Cloudinary did not return a URL.");
+        throw Exception("Failed to upload image.");
       }
-      debugPrint("--- 6. SUCCESS: Cloudinary returned URL: $newImageUrl ---");
 
-      debugPrint("--- 7. Updating user data in Firestore... ---");
       await userProvider.updateUserData({'profileImageUrl': newImageUrl});
-
-      debugPrint(
-          "--- 8. Fetching latest user data (this will auto-update the cache)... ---");
       await userProvider.updateProfileImage(newImageUrl);
 
       if (mounted) {
@@ -188,60 +205,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
           backgroundColor: Colors.green,
         ));
       }
-      debugPrint("--- 9. Process complete. ---");
     } catch (e) {
-      debugPrint("--- !!! CAUGHT AN ERROR: $e !!! ---");
       if (mounted) {
         ScaffoldMessenger.of(context)
             .showSnackBar(SnackBar(content: Text("Error updating picture: $e")));
       }
     } finally {
-      debugPrint(
-          "--- 10. 'Finally' block reached. Hiding loading indicator. ---");
       if (mounted) {
         setState(() => _isUploadingImage = false);
       }
     }
   }
 
-  Future<void> _saveProfile() async {
-    if (!mounted) return;
-    final userProvider = Provider.of<UserProvider>(context, listen: false);
-
-    setState(() => _isLoading = true);
-    try {
-      final updateData = {
-        'name': _nameController.text.trim(),
-        'notificationsEnabled': _notificationsEnabled,
-        'lastUpdated': FieldValue.serverTimestamp(),
-        'mood': _currentMood,
-        'loveLanguage': _selectedLoveLanguage,
-        'gender': _selectedGender?.name,
-      };
-
-      final prefs = await SharedPreferences.getInstance();
-      await prefs.setString('app_theme', _selectedTheme.name);
-
-      await userProvider.updateUserData(updateData);
-      await userProvider.fetchUserData();
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Profile updated successfully!')));
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context)
-            .showSnackBar(SnackBar(content: Text('Error saving profile: $e')));
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isLoading = false);
-      }
-    }
-  }
+  // ✨ [_saveProfile REMOVED] - Replaced by auto-save
 
   Future<void> _updateLocation() async {
+    // ... (Keep existing implementation)
     if (!mounted) return;
     final userProvider = Provider.of<UserProvider>(context, listen: false);
     setState(() => _isLoading = true);
@@ -250,27 +229,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
       bool serviceEnabled = await Geolocator.isLocationServiceEnabled();
       if (!serviceEnabled) {
         if (mounted) {
-          await showDialog(
-            context: context,
-            builder: (BuildContext context) => AlertDialog(
-              title: const Text('Location Services Disabled'),
-              content: const Text(
-                  'Please enable location services to update your location.'),
-              actions: <Widget>[
-                TextButton(
-                  child: const Text('Cancel'),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-                TextButton(
-                  child: const Text('Open Settings'),
-                  onPressed: () {
-                    Geolocator.openLocationSettings();
-                    Navigator.of(context).pop();
-                  },
-                ),
-              ],
-            ),
-          );
+           ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+            content: Text('Location services are disabled.')));
         }
         return;
       }
@@ -278,42 +238,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
       LocationPermission permission = await Geolocator.checkPermission();
       if (permission == LocationPermission.denied) {
         permission = await Geolocator.requestPermission();
-        if (permission == LocationPermission.denied) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-                content: Text(
-                    'Location permission is required to update your location.')));
-          }
-          return;
-        }
+        if (permission == LocationPermission.denied) return;
       }
 
-      if (permission == LocationPermission.deniedForever) {
-        if (mounted) {
-          await showDialog(
-            context: context,
-            builder: (BuildContext context) => AlertDialog(
-              title: const Text('Location Permission Required'),
-              content: const Text(
-                  'Location permission is permanently denied. Please enable it from the app settings.'),
-              actions: <Widget>[
-                TextButton(
-                  child: const Text('Cancel'),
-                  onPressed: () => Navigator.of(context).pop(),
-                ),
-                TextButton(
-                  child: const Text('Open Settings'),
-                  onPressed: () {
-                    Geolocator.openAppSettings();
-                    Navigator.of(context).pop();
-                  },
-                ),
-              ],
-            ),
-          );
-        }
-        return;
-      }
+      if (permission == LocationPermission.deniedForever) return;
 
       Position position = await Geolocator.getCurrentPosition(
           desiredAccuracy: LocationAccuracy.high);
@@ -334,7 +262,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // ✨ --- MODIFIED: ACCOUNT DELETION FIX --- ✨
   void _handleDeleteAccount() async {
     if (!mounted) return;
     final userProvider = Provider.of<UserProvider>(context, listen: false);
@@ -355,111 +282,83 @@ class _ProfileScreenState extends State<ProfileScreen> {
       return;
     }
 
-    // 1. Await the result from the dialog
-    final didConfirm = await showDialog<bool>(
+    await showDialog<bool>(
       context: context,
       barrierDismissible: false,
       builder: (context) => _DeleteAccountConfirmationDialog(
         userProvider: userProvider,
       ),
     );
-
-    // 2. Check if the dialog confirmed success (data is deleted)
-    if (didConfirm == true) {
-      // --- THIS IS THE FIX ---
-      // DO NOTHING.
-      // The Cloud Function deleted the user.
-      // The AuthWrapper detected this auth state change,
-      // triggered the provider cleanup,
-      // and is already navigating to the LoginScreen.
-      // This function's job is done.
-    }
   }
 
-
-
+  // ✨ THEME SELECTOR (FROM PREVIOUS STEP)
   void _showThemeSelector() {
-    final theme = Theme.of(context);
-    final themeProvider = Provider.of<ThemeProvider>(context, listen: false);
-
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
         borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
       ),
       builder: (bottomSheetContext) {
-        return FutureBuilder<SharedPreferences>(
-          future: SharedPreferences.getInstance(),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const SizedBox(
-                height: 200,
-                child: Center(child: CircularProgressIndicator()),
-              );
-            }
-
-            final prefs = snapshot.data!;
-            final themeName = prefs.getString('app_theme') ?? 'light';
-            AppThemeType currentTheme = AppThemeType.values.firstWhere(
-              (e) => e.name == themeName,
-              orElse: () => AppThemeType.defaultLight,
-            );
-
-            return StatefulBuilder(
-              builder: (BuildContext context, StateSetter modalSetState) {
-                return Padding(
-                  padding:
-                      const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 8.0),
-                        child: Text(
-                          'Select Theme',
-                          style: theme.textTheme.titleLarge
-                              ?.copyWith(fontWeight: FontWeight.bold),
-                        ),
+        return Consumer<ThemeProvider>(
+          builder: (context, themeProvider, child) {
+            final theme = Theme.of(context);
+            return Container(
+              color: theme.scaffoldBackgroundColor,
+              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                    child: Text(
+                      'Select Theme',
+                      style: theme.textTheme.titleLarge?.copyWith(
+                        fontWeight: FontWeight.bold,
+                        color: theme.colorScheme.onBackground,
                       ),
-                      const SizedBox(height: 16),
-                      Flexible(
-                        child: ListView(
-                          shrinkWrap: true,
-                          children: AppThemeType.values.map((themeType) {
-                            return RadioListTile<AppThemeType>(
-                              title: Text(_formatThemeName(themeType)),
-                              value: themeType,
-                              groupValue: currentTheme,
-                              onChanged: (newTheme) async {
-                                if (newTheme != null) {
-                                  themeProvider.setTheme(newTheme);
-                                  modalSetState(() {
-                                    currentTheme = newTheme;
-                                  });
-                                  // Update the main profile screen state as well
-                                  setState(() {
-                                    _selectedTheme = newTheme;
-                                  });
-                                  await prefs.setString(
-                                      'app_theme', newTheme.name);
-                                }
-                              },
-                            );
-                          }).toList(),
-                        ),
-                      ),
-                      const SizedBox(height: 16),
-                      ElevatedButton(
-                        style: ElevatedButton.styleFrom(
-                            minimumSize: const Size(double.infinity, 48)),
-                        onPressed: () => Navigator.pop(bottomSheetContext),
-                        child: const Text('Done'),
-                      )
-                    ],
+                    ),
                   ),
-                );
-              },
+                  const SizedBox(height: 16),
+                  Flexible(
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: AppThemeType.values.map((themeType) {
+                        final isSelected = themeProvider.currentThemeType == themeType;
+                        return RadioListTile<AppThemeType>(
+                          title: Text(
+                            _formatThemeName(themeType),
+                            style: theme.textTheme.bodyLarge?.copyWith(
+                              fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                            ),
+                          ),
+                          activeColor: theme.colorScheme.primary,
+                          value: themeType,
+                          groupValue: themeProvider.currentThemeType,
+                          onChanged: (newTheme) async {
+                            if (newTheme != null) {
+                              themeProvider.setTheme(newTheme);
+                              setState(() {
+                                _selectedTheme = newTheme;
+                              });
+                            }
+                          },
+                        );
+                      }).toList(),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  ElevatedButton(
+                    style: ElevatedButton.styleFrom(
+                      minimumSize: const Size(double.infinity, 48),
+                      backgroundColor: theme.colorScheme.primary,
+                      foregroundColor: theme.colorScheme.onPrimary,
+                    ),
+                    onPressed: () => Navigator.pop(bottomSheetContext),
+                    child: const Text('Done'),
+                  )
+                ],
+              ),
             );
           },
         );
@@ -467,6 +366,305 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  // ✨ GENDER SELECTOR (FROM PREVIOUS STEP)
+  void _showGenderSelector() {
+    final theme = Theme.of(context);
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 24, horizontal: 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+               Padding(
+                padding: const EdgeInsets.only(left: 8.0, bottom: 16),
+                child: Text(
+                  'Select Gender',
+                  style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                ),
+              ),
+              ...Gender.values.asMap().entries.map((entry) {
+                final index = entry.key;
+                final gender = entry.value;
+                final isSelected = _selectedGender == gender;
+                
+                // Add animation to gender items too
+                return _StaggeredItem(
+                  index: index,
+                  child: ListTile(
+                    leading: Icon(
+                      isSelected ? Icons.radio_button_checked : Icons.radio_button_off,
+                      color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurfaceVariant,
+                    ),
+                    title: Text(
+                      _getGenderDisplayName(gender),
+                      style: TextStyle(
+                        fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                        color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface,
+                      ),
+                    ),
+                    onTap: () {
+                      setState(() => _selectedGender = gender);
+                      _updateUserData({'gender': gender.name}); // ✨ AUTO-SAVE
+                      Navigator.pop(context);
+                    },
+                  ),
+                );
+              }).toList(),
+              const SizedBox(height: 12),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  // ✨✨ --- ANIMATED MOOD SELECTOR (GRID) --- ✨✨
+  void _showMoodSelectorDialog() {
+    final theme = Theme.of(context);
+    final Map<String, String> moods = const {
+      'Happy': '😄', 'Excited': '😆', 'Loved': '🥰', 'Grateful': '🙏',
+      'Peaceful': '😌', 'Content': '😊', 'Sad': '😢', 'Stressed': '😰',
+      'Lonely': '😔', 'Angry': '😡', 'Anxious': '😨', 'Confused': '😕',
+    };
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          initialChildSize: 0.70,
+          minChildSize: 0.5,
+          maxChildSize: 0.8,
+          expand: false,
+          builder: (context, scrollController) {
+            return Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                children: [
+                  Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: theme.dividerColor,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Text(
+                    'How are you feeling?',
+                    style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                  ),
+                  const SizedBox(height: 20),
+                  Expanded(
+                    child: GridView.builder(
+                      controller: scrollController,
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 12,
+                        mainAxisSpacing: 12,
+                        childAspectRatio: 1.0,
+                      ),
+                      itemCount: moods.length,
+                      itemBuilder: (context, index) {
+                        final entry = moods.entries.elementAt(index);
+                        final isSelected = _currentMood == entry.key;
+
+                        return _StaggeredItem(
+                          index: index,
+                          child: Material(
+                            // ✨ CHANGED: Always keep the neutral background
+                            color: theme.colorScheme.surfaceContainerHighest,
+                            // ✨ CHANGED: Add border only when selected
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(16),
+                              side: isSelected
+                                  ? BorderSide(color: theme.colorScheme.primary, width: 2.5)
+                                  : BorderSide.none,
+                            ),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(16),
+                              onTap: () {
+                                setState(() => _currentMood = entry.key);
+                                context.read<UserProvider>().updateUserMood(entry.key);
+                                Navigator.of(context).pop();
+                              },
+                              child: Column(
+                                mainAxisAlignment: MainAxisAlignment.center,
+                                children: [
+                                  Text(
+                                    entry.value,
+                                    style: const TextStyle(fontSize: 36),
+                                  ),
+                                  const SizedBox(height: 8),
+                                  Text(
+                                    entry.key,
+                                    style: theme.textTheme.bodyMedium?.copyWith(
+                                      fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                                      // Optional: You can keep the text red or make it black. 
+                                      // Keeping it red usually looks better with the red border.
+                                      color: isSelected 
+                                        ? theme.colorScheme.primary 
+                                        : theme.colorScheme.onSurface,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+
+  // ✨✨ --- ANIMATED LOVE LANGUAGE SELECTOR (CARDS) --- ✨✨
+  void _showLoveLanguageSelectorDialog() {
+    final theme = Theme.of(context);
+    final loveLanguages = {
+      'Words of Affirmation': 'Verbal compliments and words of encouragement.',
+      'Acts of Service': 'Actions that ease the burden of responsibilities.',
+      'Receiving Gifts': 'Visual symbols of love and thoughtfulness.',
+      'Quality Time': 'Giving undivided attention and presence.',
+      'Physical Touch': 'Hugs, holding hands, and affection.',
+    };
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        return DraggableScrollableSheet(
+          // ✨ CHANGED: Increased from 0.6 to 0.75 to show all items
+          initialChildSize: 0.70,
+          minChildSize: 0.4,
+          maxChildSize: 0.9,
+          expand: false,
+          builder: (context, scrollController) {
+            return Padding(
+              padding: const EdgeInsets.all(16.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                   Center(
+                    child: Container(
+                      width: 40,
+                      height: 4,
+                      decoration: BoxDecoration(
+                        color: theme.dividerColor,
+                        borderRadius: BorderRadius.circular(2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8.0),
+                    child: Text(
+                      'What\'s Your Love Language?',
+                      style: theme.textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Expanded(
+                    child: ListView.builder(
+                      controller: scrollController,
+                      itemCount: loveLanguages.length,
+                      itemBuilder: (context, index) {
+                        final entry = loveLanguages.entries.elementAt(index);
+                        final isSelected = _selectedLoveLanguage == entry.key;
+
+                        return _StaggeredItem(
+                          index: index,
+                          child: Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            decoration: BoxDecoration(
+                              // Slight background tint when selected, but mostly relies on border/icon
+                              color: isSelected 
+                                ? theme.colorScheme.primaryContainer.withOpacity(0.1) 
+                                : theme.colorScheme.surface,
+                              borderRadius: BorderRadius.circular(12),
+                              border: Border.all(
+                                color: isSelected 
+                                  ? theme.colorScheme.primary 
+                                  : theme.dividerColor.withOpacity(0.5),
+                                width: isSelected ? 2 : 1,
+                              ),
+                            ),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(12),
+                              onTap: () {
+                                setState(() => _selectedLoveLanguage = entry.key);
+                                _updateUserData({'loveLanguage': entry.key}); // ✨ AUTO-SAVE
+                                Navigator.of(context).pop();
+                              },
+                              child: Padding(
+                                padding: const EdgeInsets.all(16.0),
+                                child: Row(
+                                  children: [
+                                    Expanded(
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            entry.key,
+                                            style: theme.textTheme.titleMedium?.copyWith(
+                                              fontWeight: FontWeight.bold,
+                                              color: isSelected ? theme.colorScheme.primary : theme.colorScheme.onSurface,
+                                            ),
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            entry.value,
+                                            style: theme.textTheme.bodySmall?.copyWith(
+                                              color: theme.colorScheme.onSurfaceVariant,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                    if (isSelected)
+                                      Icon(Icons.check_circle, color: theme.colorScheme.primary),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+
+  // ... (Existing Helper Methods)
   Future<void> _launchURL(String url) async {
     final Uri uri = Uri.parse(url);
     if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
@@ -521,6 +719,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
   }
 
   Future<void> _handleDisconnect() async {
+    // ... (Existing Logic)
     if (!mounted) return;
 
     final userProvider = Provider.of<UserProvider>(context, listen: false);
@@ -577,16 +776,8 @@ class _ProfileScreenState extends State<ProfileScreen> {
     }
   }
 
-  // ✨ --- REMOVED: This function is no longer needed as logic is inlined --- ✨
-  // Future<void> _performLogoutCleanup(BuildContext context) async { ... }
-
-  // ✨ --- MODIFIED: LOGOUT FIX --- ✨
-  // lib/features/auth/screens/profile_screen.dart
-
-// In profile_screen.dart
-
-void _showLogoutConfirmationDialog() {
-    final theme = Theme.of(context);
+  void _showLogoutConfirmationDialog() {
+    // ... (Existing Logic)
     final mainContext = context;
 
     showDialog(
@@ -596,7 +787,6 @@ void _showLogoutConfirmationDialog() {
         return StatefulBuilder(
           builder: (context, setState) {
             return AlertDialog(
-              // ... (your existing dialog setup)
               title: const Text('Log Out'),
               content: const Text('Are you sure you want to log out?'),
               actions: [
@@ -605,18 +795,13 @@ void _showLogoutConfirmationDialog() {
                   child: const Text('Cancel'),
                 ),
                 ElevatedButton(
-                  // ... (style)
                   onPressed: isLoggingOut
                       ? null
-                      : () { // 1. REMOVE 'async'
+                      : () { 
                           setState(() => isLoggingOut = true);
                           Navigator.of(dialogContext).pop();
                           
-                          // 2. DO NOT AWAIT. Just call the function.
-                          //    The AuthWrapper will handle the navigation.
                           mainContext.read<AuthService>().logout().catchError((e) {
-                            // 3. Add a catchError in case the logout() itself fails
-                            //    before the signOut() call.
                             if (mainContext.mounted) {
                               ScaffoldMessenger.of(mainContext).showSnackBar(
                                 SnackBar(
@@ -643,125 +828,89 @@ void _showLogoutConfirmationDialog() {
     );
   }
 
-
-
   void _showChangePasswordDialog() {
     Navigator.push(context,
         MaterialPageRoute(builder: (context) => const ChangePasswordScreen()));
   }
 
-  void _showDeleteAccountDialog() {
-    showDialog(
-      context: context,
-      builder: (BuildContext context) => AlertDialog(
-        title: const Text('Delete Account'),
-        content: const Text(
-            'Are you sure you want to delete your account? This action cannot be undone.'),
-        actions: [
-          TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            style: TextButton.styleFrom(
-                foregroundColor: Theme.of(context).colorScheme.error),
-            child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showMoodSelectorDialog() {
-    final Map<String, String> moods = const {
-      'Happy': '😄', 'Excited': '😆', 'Loved': '🥰', 'Grateful': '🙏',
-      'Peaceful': '😌', 'Content': '😊', 'Sad': '😢', 'Stressed': '😰',
-      'Lonely': '😔', 'Angry': '😡', 'Anxious': '😨', 'Confused': '😕',
-    };
-
-    showDialog(
-      context: context,
-      builder: (context) {
-        return AlertDialog(
-          title: const Text('How are you feeling?'),
-          content: SizedBox(
-            width: double.maxFinite,
-            child: ListView(
-              shrinkWrap: true,
-              children: moods.entries.map((entry) {
-                return ListTile(
-                  leading:
-                      Text(entry.value, style: const TextStyle(fontSize: 24)),
-                  title: Text(entry.key),
-                  onTap: () {
-                    setState(() => _currentMood = entry.key);
-                    context.read<UserProvider>().updateUserMood(entry.key);
-                    Navigator.of(context).pop();
-                  },
-                );
-              }).toList(),
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  void _showLoveLanguageSelectorDialog() {
-    final loveLanguages = {
-      'Words of Affirmation': 'Verbal compliments and words of encouragement.',
-      'Acts of Service': 'Actions that ease the burden of responsibilities.',
-      'Receiving Gifts': 'Visual symbols of love and thoughtfulness.',
-      'Quality Time': 'Giving undivided attention and presence.',
-      'Physical Touch': 'Hugs, holding hands, and affection.',
-    };
-    showDialog(
-        context: context,
-        builder: (context) => AlertDialog(
-              title: const Text('What\'s Your Love Language?'),
-              content: SizedBox(
-                width: double.maxFinite,
-                child: ListView(
-                  shrinkWrap: true,
-                  children: loveLanguages.entries
-                      .map((entry) => ListTile(
-                            title: Text(entry.key),
-                            subtitle: Text(entry.value,
-                                style: Theme.of(context).textTheme.bodySmall),
-                            onTap: () {
-                              setState(() => _selectedLoveLanguage = entry.key);
-                              Navigator.of(context).pop();
-                            },
-                          ))
-                      .toList(),
-                ),
-              ),
-            ));
-  }
-
   String _getGenderDisplayName(Gender gender) {
     switch (gender) {
-      case Gender.male:
-        return 'Male';
-      case Gender.female:
-        return 'Female';
-      case Gender.other:
-        return 'Other';
-      case Gender.preferNotToSay:
-        return 'Prefer Not To Say';
+      case Gender.male: return 'Male';
+      case Gender.female: return 'Female';
+      case Gender.other: return 'Other';
+      case Gender.preferNotToSay: return 'Prefer Not To Say';
     }
   }
 
-  // ✨ --- NEW HELPER FUNCTION TO FORMAT THEME NAMES --- ✨
   String _formatThemeName(AppThemeType theme) {
     if (theme.name.isEmpty) return '';
-    // Handles cases like 'defaultLight' -> 'default Light'
     String spacedName = theme.name.replaceAllMapped(
       RegExp(r'(?<=[a-z])(?=[A-Z])'),
       (Match m) => ' ${m.group(0)}',
     );
-    // Capitalizes the first letter -> 'Default Light'
     return spacedName[0].toUpperCase() + spacedName.substring(1);
+  }
+
+  Widget _buildModernTile({
+    required IconData icon,
+    required String title,
+    String? subtitle,
+    Widget? trailing,
+    VoidCallback? onTap,
+    Color? iconColor,
+    bool isDestructive = false,
+  }) {
+    final theme = Theme.of(context);
+    final color = isDestructive ? theme.colorScheme.error : (iconColor ?? theme.colorScheme.primary);
+    
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+        border: Border.all(color: theme.colorScheme.outlineVariant.withOpacity(0.5)),
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          borderRadius: BorderRadius.circular(20),
+          onTap: onTap,
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
+            child: ListTile(
+              leading: Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: color.withOpacity(0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(icon, color: color, size: 22),
+              ),
+              title: Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  fontWeight: FontWeight.w600,
+                  color: isDestructive ? color : theme.colorScheme.onSurface,
+                ),
+              ),
+              subtitle: subtitle != null
+                  ? Text(subtitle, style: theme.textTheme.bodySmall)
+                  : null,
+              trailing: trailing ?? (onTap != null 
+                  ? Icon(Icons.chevron_right_rounded, color: theme.colorScheme.onSurfaceVariant) 
+                  : null),
+            ),
+          ),
+        ),
+      ),
+    );
   }
 
   // --- BUILD METHOD ---
@@ -772,8 +921,10 @@ void _showLogoutConfirmationDialog() {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Edit Profile'),
+        title: const Text('Profile'),
         centerTitle: true,
+        backgroundColor: Colors.transparent, // ✨ Modern look
+        elevation: 0,
         actions: [
           IconButton(
             icon: const Icon(Icons.logout),
@@ -783,37 +934,36 @@ void _showLogoutConfirmationDialog() {
         ],
       ),
       body: showLoadingIndicator
-          ? Center(
-              child: PulsingDotsIndicator(
-                size: 80,
-                colors: [
-                  theme.colorScheme.primary,
-                  theme.colorScheme.primary,
-                  theme.colorScheme.primary,
-                ],
-              ),
-            )
+          ? const Center(child: PulsingDotsIndicator())
           : SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              padding: const EdgeInsets.only(bottom: 40),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  ProfileAvatar(onPickImage: _pickAndUploadImage),
+                  const SizedBox(height: 20),
+                  ProfileAvatar(
+                    onPickImage: _pickAndUploadImage,
+                  ),
+                  const SizedBox(height: 24),
                   BasicInfoSection(
                     nameController: _nameController,
+                    nameFocusNode: _nameFocusNode,
+                    onNameSubmitted: (_) => _updateName(),
+                    email: _email,
                     currentMood: _currentMood,
                     selectedLoveLanguage: _selectedLoveLanguage,
                     selectedGender: _selectedGender,
                     onSelectMood: _showMoodSelectorDialog,
                     onSelectLoveLanguage: _showLoveLanguageSelectorDialog,
-                    onGenderChanged: (gender) =>
-                        setState(() => _selectedGender = gender),
+                    onSelectGender: _showGenderSelector,
                     getGenderDisplayName: _getGenderDisplayName,
                   ),
 
-                  PartnerConnectionSection(onDisconnect: _handleDisconnect),
+                  PartnerConnectionSection(
+                     onDisconnect: _handleDisconnect,
+                  ),
 
-                  // ✨ --- PASSING THE NEW FORMATTER FUNCTION --- ✨
+                  // ✨ SETTINGS SECTION (With Auto-Save Notifications)
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -824,40 +974,82 @@ void _showLogoutConfirmationDialog() {
                             ?.copyWith(fontWeight: FontWeight.bold),
                       ),
                       const SizedBox(height: 8),
-                      Card(
-                        margin: EdgeInsets.zero,
-                        child: Column(
-                          children: [
-                            SwitchListTile(
-                              title: const Text('Enable Notifications'),
+                      Column(
+                        children: [
+                          _buildModernTile(
+                            icon: Icons.notifications_outlined,
+                            title: 'Enable Notifications',
+                            trailing: Switch(
                               value: _notificationsEnabled,
-                              onChanged: (value) =>
-                                  setState(() => _notificationsEnabled = value),
-                              secondary:
-                                  const Icon(Icons.notifications_outlined),
+                              onChanged: (value) {
+                                setState(() => _notificationsEnabled = value);
+                                _updateUserData({'notificationsEnabled': value}); // ✨ AUTO-SAVE
+                              },
                             ),
-                            const Divider(height: 1, indent: 16, endIndent: 16),
-                            ListTile(
-                              leading: const Icon(Icons.palette_outlined),
-                              title: const Text('App Theme'),
-                              trailing: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    _formatThemeName(_selectedTheme),
-                                    style: theme.textTheme.bodyMedium?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
+                          ),
+                             // ✨ E2EE SETTINGS TILE
+                             Consumer<UserProvider>(
+                              builder: (context, provider, child) {
+                                final status = provider.currentUser?.encryptionStatus ?? 'pending';
+                                
+                                String statusText = 'Pending';
+                                Color statusColor = Colors.orange;
+                                
+                                if (status == 'enabled') {
+                                  if (EncryptionService.instance.isReady) {
+                                    statusText = 'Secure';
+                                    statusColor = Colors.green;
+                                  } else {
+                                    statusText = 'Key Missing';
+                                    statusColor = Colors.red;
+                                  }
+                                } else if (status == 'disabled') {
+                                  statusText = 'Disabled';
+                                  statusColor = Colors.grey;
+                                }
+
+                              return _buildModernTile(
+                                icon: Icons.lock_outline,
+                                title: 'End-to-End Encryption',
+                                subtitle: statusText,
+                                iconColor: statusColor,
+                                onTap: () {
+                                    showDialog(
+                                      context: context,
+                                      builder: (context) => const EncryptionSetupDialog(),
+                                    );
+                                  },
+                                );
+                              },
+                            ),
+
+                          _buildModernTile(
+                            icon: Icons.palette_outlined,
+                            title: 'App Theme',
+                            trailing: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                Text(
+                                  _formatThemeName(_selectedTheme),
+                                  style: theme.textTheme.bodyMedium?.copyWith(
+                                    color: theme.colorScheme.onSurfaceVariant,
                                   ),
-                                  const SizedBox(width: 8),
-                                  const Icon(Icons.chevron_right),
-                                ],
-                              ),
-                              onTap: _showThemeSelector,
+                                ),
+                                const SizedBox(width: 8),
+                                Icon(Icons.chevron_right_rounded, color: theme.colorScheme.onSurfaceVariant),
+                              ],
                             ),
+                            onTap: _showThemeSelector,
+                          ),
+                          _buildModernTile(
+                            icon: Icons.star_rounded,
+                            title: 'Rate Feelings',
+                            subtitle: 'Love the app? Let us know!',
+                            iconColor: Colors.amber,
+                            onTap: () => ReviewService().openStoreListing(),
+                          ),
                           ],
                         ),
-                      ),
                     ],
                   ),
 
@@ -872,12 +1064,13 @@ void _showLogoutConfirmationDialog() {
 
                   const SizedBox(height: 24),
 
-                  ElevatedButton(
-                    style: ElevatedButton.styleFrom(
-                        minimumSize: const Size(double.infinity, 54)),
-                    onPressed: _saveProfile,
-                    child: const Text('Save Changes'),
-                  ),
+                  // ✨ [REMOVED] Save Button
+                  // ElevatedButton(
+                  //   style: ElevatedButton.styleFrom(
+                  //       minimumSize: const Size(double.infinity, 54)),
+                  //   onPressed: _saveProfile,
+                  //   child: const Text('Save Changes'),
+                  // ),
 
                   const SizedBox(height: 16),
                 ],
@@ -887,7 +1080,7 @@ void _showLogoutConfirmationDialog() {
   }
 }
 
-// ... (rest of the file with dialog widgets remains the same) ...
+// ... (Keep _DisconnectConfirmationDialog and _DeleteAccountConfirmationDialog classes here, unchanged)
 
 class _DisconnectConfirmationDialog extends StatefulWidget {
   final bool isFirstToDisconnect;
@@ -938,127 +1131,115 @@ class _DisconnectConfirmationDialogState
     }
   }
 
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final media = MediaQuery.of(context);
 
+    final titleText = widget.isFirstToDisconnect
+        ? 'Disconnect from Partner?'
+        : 'Delete Shared Journey?';
 
+    final contentText = widget.isFirstToDisconnect
+        ? 'You will lose access to this shared journey immediately. Your partner will retain access until they also disconnect.'
+        : 'You are the last person in this relationship. This will permanently delete all shared data. This action cannot be undone.';
 
-@override
-Widget build(BuildContext context) {
-  final theme = Theme.of(context);
-  final media = MediaQuery.of(context);
+    final maxDialogHeight = (media.size.height - media.viewInsets.bottom) * 0.72;
 
-  final titleText = widget.isFirstToDisconnect
-      ? 'Disconnect from Partner?'
-      : 'Delete Shared Journey?';
-
-  final contentText = widget.isFirstToDisconnect
-      ? 'You will lose access to this shared journey immediately. Your partner will retain access until they also disconnect.'
-      : 'You are the last person in this relationship. This will permanently delete all shared data. This action cannot be undone.';
-
-  // Allow up to 70–75% of usable height; remaining space keeps it comfortable
-  final maxDialogHeight = (media.size.height - media.viewInsets.bottom) * 0.72;
-
-  // ✨ --- FIX: REMOVED AnimatedPadding WRAPPER --- ✨
-  return AlertDialog(
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-    scrollable: true,
-    title: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
-        const SizedBox(width: 8),
-        Expanded(
-          child: Text(
-            titleText,
-            softWrap: true,
-            maxLines: 3,
-            overflow: TextOverflow.visible,
-            textAlign: TextAlign.start,
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      scrollable: true,
+      title: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              titleText,
+              softWrap: true,
+              maxLines: 3,
+              overflow: TextOverflow.visible,
+              textAlign: TextAlign.start,
+            ),
           ),
+        ],
+      ),
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: maxDialogHeight,
+          minWidth: 280,
+        ),
+        child: Scrollbar(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(contentText),
+                const SizedBox(height: 20),
+                Text(
+                  'For your security, please confirm your password to continue.',
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) {
+                    if (!_isLoading) _reauthenticateAndProceed();
+                  },
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    errorText: _errorMessage,
+                  ),
+                  onChanged: (_) {
+                    if (_errorMessage != null) {
+                      setState(() => _errorMessage = null);
+                    }
+                  },
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+      actionsOverflowDirection: VerticalDirection.down,
+      actionsOverflowAlignment: OverflowBarAlignment.end,
+      actionsOverflowButtonSpacing: 8,
+      actionsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      actions: [
+        TextButton(
+          onPressed: _isLoading ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _isLoading ? null : _reauthenticateAndProceed,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: theme.colorScheme.error,
+            foregroundColor: theme.colorScheme.onError,
+          ),
+          child: _isLoading
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : Text(widget.isFirstToDisconnect ? 'Disconnect' : 'Delete Forever'),
         ),
       ],
-    ),
-    content: ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: maxDialogHeight,
-        minWidth: 280,
-      ),
-      child: Scrollbar(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(contentText),
-              const SizedBox(height: 20),
-              Text(
-                'For your security, please confirm your password to continue.',
-                style: theme.textTheme.bodySmall,
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) {
-                  if (!_isLoading) _reauthenticateAndProceed();
-                },
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  errorText: _errorMessage,
-                ),
-                onChanged: (_) {
-                  if (_errorMessage != null) {
-                    setState(() => _errorMessage = null);
-                  }
-                },
-              ),
-            ],
-          ),
-        ),
-      ),
-    ),
-    actionsOverflowDirection: VerticalDirection.down,
-    actionsOverflowAlignment: OverflowBarAlignment.end,
-    actionsOverflowButtonSpacing: 8,
-    actionsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-    actions: [
-      TextButton(
-        onPressed: _isLoading ? null : () => Navigator.pop(context, false),
-        child: const Text('Cancel'),
-      ),
-      ElevatedButton(
-        onPressed: _isLoading ? null : _reauthenticateAndProceed,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: theme.colorScheme.error,
-          foregroundColor: theme.colorScheme.onError,
-        ),
-        child: _isLoading
-            ? const SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-            : Text(widget.isFirstToDisconnect ? 'Disconnect' : 'Delete Forever'),
-      ),
-    ],
-  );
-}
-
-
+    );
+  }
 }
 
 class _DeleteAccountConfirmationDialog extends StatefulWidget {
-  // Add this
   final UserProvider userProvider;
-
-  const _DeleteAccountConfirmationDialog({
-    // Add this
-    required this.userProvider,
-  });
+  const _DeleteAccountConfirmationDialog({required this.userProvider});
 
   @override
   State<_DeleteAccountConfirmationDialog> createState() =>
@@ -1070,9 +1251,6 @@ class _DeleteAccountConfirmationDialogState
   final _passwordController = TextEditingController();
   String? _errorMessage;
   bool _isLoading = false;
-
-// lib/features/auth/screens/profile_screen.dart
-// Inside _DeleteAccountConfirmationDialogState
 
   Future<void> _reauthenticateAndProceedWithDeletion() async {
     if (!mounted) return;
@@ -1087,118 +1265,168 @@ class _DeleteAccountConfirmationDialogState
       _errorMessage = null;
     });
 
-    // ✨ --- THIS IS THE FIX --- ✨
-    // 1. Get the navigator for the DIALOG.
     final dialogNavigator = Navigator.of(context);
 
     try {
-      // 2. Call the delete function
       await widget.userProvider
           .deleteCurrentUserAccount(_passwordController.text.trim());
       
-      // 3. If successful, pop the dialog
       if (dialogNavigator.canPop()) {
-        dialogNavigator.pop(true); // Pop with `true` on success.
+        dialogNavigator.pop(true);
       }
       
     } catch (e) {
-      // 4. If it fails, *don't* pop. Just show the error.
       setState(() {
         _errorMessage = e.toString().replaceFirst('Exception: ', '');
         _isLoading = false;
       });
     }
-    // No finally block, we only close the dialog on success.
   }
 
-
   @override
-Widget build(BuildContext context) {
-  final theme = Theme.of(context);
-  final media = MediaQuery.of(context);
-  final maxDialogHeight = (media.size.height - media.viewInsets.bottom) * 0.72;
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final media = MediaQuery.of(context);
+    final maxDialogHeight = (media.size.height - media.viewInsets.bottom) * 0.72;
 
-  // ✨ --- FIX: REMOVED AnimatedPadding WRAPPER --- ✨
-  return AlertDialog(
-    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-    insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
-    scrollable: true,
-    title: Row(
-      children: [
-        Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
-        const SizedBox(width: 8),
-        const Text('Delete Account?'),
-      ],
-    ),
-    content: ConstrainedBox(
-      constraints: BoxConstraints(
-        maxHeight: maxDialogHeight,
-        minWidth: 280,
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 24),
+      scrollable: true,
+      title: Row(
+        children: [
+          Icon(Icons.warning_amber_rounded, color: theme.colorScheme.error),
+          const SizedBox(width: 8),
+          const Text('Delete Account?'),
+        ],
       ),
-      child: Scrollbar(
-        child: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'This action is permanent and cannot be undone. All your personal data will be deleted.',
-              ),
-              const SizedBox(height: 20),
-              Text(
-                'To confirm, please enter your password.',
-                style: theme.textTheme.bodySmall,
-              ),
-              const SizedBox(height: 8),
-              TextField(
-                controller: _passwordController,
-                obscureText: true,
-                textInputAction: TextInputAction.done,
-                onSubmitted: (_) {
-                  if (!_isLoading) _reauthenticateAndProceedWithDeletion();
-                },
-                decoration: InputDecoration(
-                  labelText: 'Password',
-                  errorText: _errorMessage,
+      content: ConstrainedBox(
+        constraints: BoxConstraints(
+          maxHeight: maxDialogHeight,
+          minWidth: 280,
+        ),
+        child: Scrollbar(
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text(
+                  'This action is permanent and cannot be undone. All your personal data will be deleted.',
                 ),
-                onChanged: (_) {
-                  if (_errorMessage != null) {
-                    setState(() => _errorMessage = null);
-                  }
-                },
-              ),
-            ],
+                const SizedBox(height: 20),
+                Text(
+                  'To confirm, please enter your password.',
+                  style: theme.textTheme.bodySmall,
+                ),
+                const SizedBox(height: 8),
+                TextField(
+                  controller: _passwordController,
+                  obscureText: true,
+                  textInputAction: TextInputAction.done,
+                  onSubmitted: (_) {
+                    if (!_isLoading) _reauthenticateAndProceedWithDeletion();
+                  },
+                  decoration: InputDecoration(
+                    labelText: 'Password',
+                    errorText: _errorMessage,
+                  ),
+                  onChanged: (_) {
+                    if (_errorMessage != null) {
+                      setState(() => _errorMessage = null);
+                    }
+                  },
+                ),
+              ],
+            ),
           ),
         ),
       ),
-    ),
-    actionsOverflowDirection: VerticalDirection.down,
-    actionsOverflowAlignment: OverflowBarAlignment.end,
-    actionsOverflowButtonSpacing: 8,
-    actionsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
-    actions: [
-      TextButton(
-        onPressed: _isLoading ? null : () => Navigator.pop(context, false),
-        child: const Text('Cancel'),
-      ),
-      ElevatedButton(
-        onPressed: _isLoading ? null : _reauthenticateAndProceedWithDeletion,
-        style: ElevatedButton.styleFrom(
-          backgroundColor: theme.colorScheme.error,
-          foregroundColor: theme.colorScheme.onError,
+      actionsOverflowDirection: VerticalDirection.down,
+      actionsOverflowAlignment: OverflowBarAlignment.end,
+      actionsOverflowButtonSpacing: 8,
+      actionsPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+      actions: [
+        TextButton(
+          onPressed: _isLoading ? null : () => Navigator.pop(context, false),
+          child: const Text('Cancel'),
         ),
-        child: _isLoading
-            ? const SizedBox(
-                height: 20,
-                width: 20,
-                child: CircularProgressIndicator(
-                  strokeWidth: 2,
-                  color: Colors.white,
-                ),
-              )
-            : const Text('Delete My Account'),
-      ),
-    ],
-  );
+        ElevatedButton(
+          onPressed: _isLoading ? null : _reauthenticateAndProceedWithDeletion,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: theme.colorScheme.error,
+            foregroundColor: theme.colorScheme.onError,
+          ),
+          child: _isLoading
+              ? const SizedBox(
+                  height: 20,
+                  width: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.white,
+                  ),
+                )
+              : const Text('Delete My Account'),
+        ),
+      ],
+    );
+  }
 }
+
+// ✨✨ --- NEW ANIMATION HELPER CLASS --- ✨✨
+class _StaggeredItem extends StatefulWidget {
+  final int index;
+  final Widget child;
+  final Duration duration;
+  final double offset;
+
+  const _StaggeredItem({
+    required this.index,
+    required this.child,
+    this.duration = const Duration(milliseconds: 400),
+    this.offset = 50.0,
+  });
+
+  @override
+  State<_StaggeredItem> createState() => _StaggeredItemState();
+}
+
+class _StaggeredItemState extends State<_StaggeredItem> with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _fadeAnimation;
+  late Animation<Offset> _slideAnimation;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(vsync: this, duration: widget.duration);
+    
+    _fadeAnimation = CurvedAnimation(parent: _controller, curve: Curves.easeOut);
+    _slideAnimation = Tween<Offset>(
+      begin: Offset(0, 0.5), // Start slightly below
+      end: Offset.zero,
+    ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOut));
+
+    // Stagger effect: Delay start based on index
+    Future.delayed(Duration(milliseconds: widget.index * 50), () {
+      if (mounted) _controller.forward();
+    });
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FadeTransition(
+      opacity: _fadeAnimation,
+      child: SlideTransition(
+        position: _slideAnimation,
+        child: widget.child,
+      ),
+    );
+  }
 }

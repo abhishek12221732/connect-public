@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:feelings/features/auth/services/user_repository.dart'; // Import the UserRepository
+import 'package:feelings/services/encryption_service.dart';
 
 class CoupleRepository {
   final FirebaseFirestore _firestore;
@@ -44,7 +45,7 @@ class CoupleRepository {
   }
 
   // Get a couple where the user is involved
-  Future<DocumentSnapshot<Map<String, dynamic>>?> getCoupleByUserId(String userId) async {
+  Future<DocumentSnapshot<Map<String, dynamic>>?> getCoupleByUserId(String userId, {Source? source}) async {
     final query = await _firestore
         .collection('couples')
         .where(Filter.or(
@@ -52,7 +53,7 @@ class CoupleRepository {
           Filter("user2Id", isEqualTo: userId),
         ))
         .limit(1)
-        .get();
+        .get(source != null ? GetOptions(source: source) : null);
 
     return query.docs.isNotEmpty ? query.docs.first : null;
   }
@@ -85,11 +86,27 @@ class CoupleRepository {
   return null;
 }
   // New function to get partner's user data
-  Future<Map<String, dynamic>?> getPartnerUserData(String currentUserId) async {
+  Future<Map<String, dynamic>?> getPartnerUserData(String currentUserId, {Source? source}) async {
     try {
-      final partnerId = await getPartnerId(currentUserId);
+      // Logic note: To get partner ID, we first need to read the couple doc.
+      // We should ideally pass 'source' to getPartnerId as well if we want full cache support,
+      // but getPartnerId is a helper. Let's make it robust.
+      // For now, we fetch the partner ID (which uses getCoupleByUserId - so it respects cache if we passed it, but getPartnerId needs updating too?)
+      // Actually, let's just use getCoupleByUserId directly here to ensure cache usage
+      
+      final coupleDoc = await getCoupleByUserId(currentUserId, source: source);
+      String? partnerId;
+       if (coupleDoc != null) {
+        final data = coupleDoc.data();
+        if (data?['user1Id'] == currentUserId) {
+          partnerId = data?['user2Id'] as String?;
+        } else if (data?['user2Id'] == currentUserId) {
+          partnerId = data?['user1Id'] as String?;
+        }
+      }
+
       if (partnerId != null) {
-        return await _userRepository.getUserData(partnerId);
+        return await _userRepository.getUserData(partnerId, source: source);
       }
     } catch (e) {
       throw Exception('Failed to get partner user data: $e');
@@ -170,13 +187,36 @@ if (partnerData?['coupleId'] != null) {
       'user2Id': user2Id,
       'members': [user1Id, user2Id], // Storing members in an array is good for queries
       'disconnectedUsers': [], // Initialize as empty
+      'encryptionVersion': 1,
       'createdAt': FieldValue.serverTimestamp(),
     });
 
     final coupleId = coupleRef.id;
+
+    // ✨ 2. Generate and Store the Master Key LOCALLY immediately
+    // Since this user is the "creator" of the couple doc, they generate the key.
+    // The partner will need to receive it later (Phase 1.5).
+    await EncryptionService.instance.generateAndSaveMasterKey(coupleId);
+
+    // 3. Link users
     final batch = _firestore.batch();
     batch.update(_firestore.collection('users').doc(user1Id), {'coupleId': coupleId});
     batch.update(_firestore.collection('users').doc(user2Id), {'coupleId': coupleId});
+
+    // ✨ 4. Create the 'keys' subcollection placeholder
+    // This helps us track who has the key later.
+    final keyRef = _firestore
+        .collection('couples')
+        .doc(coupleId)
+        .collection('encrypted_keys')
+        .doc(user1Id); // The creator has it.
+        
+    batch.set(keyRef, {
+      'hasKey': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+      // In Phase 1.5, we will put the actual encrypted key backup here.
+    });
+
     await batch.commit();
   }
 
@@ -314,6 +354,58 @@ Future<DocumentSnapshot<Map<String, dynamic>>?> _findCoupleDocumentForUsers(
     } catch (e) {
       print("Error checking couple inactivity: $e");
       return true; // Default to inactive on error to be safe.
+    }
+  }
+  // Add inside CoupleRepository
+
+  /// 1. Upload my Device Public Key so my partner can find it
+  Future<void> uploadDevicePublicKey(String userId, String publicKey) async {
+    await _firestore.collection('users').doc(userId).update({
+      'publicKey': publicKey,
+      'publicKeyUpdatedAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// 2. Fetch partner's Public Key
+  Future<String?> getPartnerPublicKey(String partnerId) async {
+    final doc = await _firestore.collection('users').doc(partnerId).get();
+    if (doc.exists && doc.data() != null) {
+      return doc.data()!['publicKey'] as String?;
+    }
+    return null;
+  }
+
+  /// 3. Upload the Encrypted CMK for the partner
+  Future<void> uploadEncryptedKeyForPartner(String coupleId, String partnerId, Map<String, String> encryptedData) async {
+    await _firestore
+        .collection('couples')
+        .doc(coupleId)
+        .collection('encrypted_keys')
+        .doc(partnerId) // The ID of the person *receiving* the key
+        .set({
+      'ciphertext': encryptedData['ciphertext'],
+      'nonce': encryptedData['nonce'],
+      'mac': encryptedData['mac'],
+      'createdAt': FieldValue.serverTimestamp(),
+    });
+  }
+
+  /// 4. Listen for an incoming key (Used by the partner waiting for the key)
+  Stream<DocumentSnapshot> listenForIncomingKey(String coupleId, String myUserId) {
+    return _firestore
+        .collection('couples')
+        .doc(coupleId)
+        .collection('encrypted_keys')
+        .doc(myUserId)
+        .snapshots();
+  }
+  // ✨ **[NEW]** Generic helper to update a field in the couple document.
+  Future<void> updateCoupleField(String coupleId, String field, dynamic value) async {
+    try {
+      await _firestore.collection('couples').doc(coupleId).update({field: value});
+    } catch (e) {
+      // debugPrint("Error updating couple field $field: $e");
+      // throw e; // Optional: rethrow or just log
     }
   }
 }

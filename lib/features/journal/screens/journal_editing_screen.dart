@@ -7,6 +7,8 @@ import '../../../providers/journal_provider.dart';
 import '../../../providers/user_provider.dart';
 import '../widgets/shared_journal_quill_editor.dart';
 
+import 'package:feelings/services/encryption_service.dart';
+
 class JournalEditingScreen extends StatefulWidget {
   final Map<String, dynamic>? entryData;
   final bool isShared;
@@ -60,28 +62,98 @@ class _JournalEditingScreenState extends State<JournalEditingScreen>
     _initialTitle = _currentEntryData?['title'] ?? '';
     _titleController.text = _initialTitle;
 
-    if (widget.isShared) {
-      // ✨ [MODIFY] Use _currentEntryData
-      if (_currentEntryData?['segments'] != null) {
-        final segs = _currentEntryData!['segments'] as List<dynamic>;
-        _sharedSegments = segs.map((s) => Map<String, dynamic>.from(s)).toList();
-        _initialSharedSegments = List.from(_sharedSegments);
-      }
-    } else {
-      // ✨ [MODIFY] Use _currentEntryData
-      _initialContent = _currentEntryData?['content'] ?? '';
-      _contentController.text = _initialContent;
-      _updateWordCount();
-      _contentController.addListener(_updateWordCount);
-    }
-    
+    _initAndDecrypt();
     _startAutoSaveTimer();
     
     _syncAnimationController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1200),
+       vsync: this,
+       duration: const Duration(milliseconds: 1200),
     )..repeat();
   }
+
+  Future<void> _initAndDecrypt() async {
+     setState(() => _isLoading = true);
+
+     // 1. Shared Journal Decryption
+     if (widget.isShared) {
+       if (_currentEntryData?['segments'] != null) {
+         final segs = _currentEntryData!['segments'] as List<dynamic>;
+         List<Map<String, dynamic>> decryptedSegs = [];
+         
+         for (var segment in segs) {
+            Map<String, dynamic> segMap = Map<String, dynamic>.from(segment);
+            
+            // Check for Encryption
+            if (segMap['encryptionVersion'] == 1 && 
+                segMap['ciphertext'] != null && 
+                segMap['nonce'] != null && 
+                segMap['mac'] != null) {
+               try {
+                  final decrypted = await EncryptionService.instance.decryptText(
+                         segMap['ciphertext'], segMap['nonce'], segMap['mac']);
+                  
+                  segMap['text'] = decrypted ?? "🔒 Error";
+                  // Clear crypto fields from UI model so editor shows text
+                  segMap.remove('ciphertext');
+                  segMap.remove('nonce');
+                  segMap.remove('mac');
+                  segMap.remove('encryptionVersion'); // Will be re-added on save by repo
+               } catch (e) {
+                  segMap['text'] = "🔒 Decryption Failed";
+               }
+            } else {
+               // Normalize text key
+               segMap['text'] = segMap['text'] ?? segMap['content'] ?? "";
+            }
+            // Normalize type
+            segMap['type'] = segMap['type'] ?? 'text';
+            decryptedSegs.add(segMap);
+         }
+         
+         if (mounted) {
+            setState(() {
+              _sharedSegments = decryptedSegs;
+              _initialSharedSegments = List.from(_sharedSegments.map((s) => Map<String, dynamic>.from(s)));
+            });
+         }
+       }
+     } 
+     // 2. Personal Journal Decryption
+     else {
+       String content = _currentEntryData?['content'] ?? '';
+       
+       // Detect if main content is encrypted
+       if (_currentEntryData?['encryptionVersion'] == 1 && 
+           _currentEntryData?['ciphertext'] != null &&
+           _currentEntryData?['nonce'] != null &&
+           _currentEntryData?['mac'] != null) {
+            try {
+               final decrypted = await EncryptionService.instance.decryptText(
+                         _currentEntryData!['ciphertext'], 
+                         _currentEntryData!['nonce'], 
+                         _currentEntryData!['mac']);
+               content = decrypted ?? content;
+            } catch (e) {
+               content = "🔒 Decryption Failed";
+            }
+       }
+       
+       if (mounted) {
+         setState(() {
+           _initialContent = content;
+           _contentController.text = _initialContent;
+           _updateWordCount();
+           _contentController.addListener(_updateWordCount);
+         });
+       }
+     }
+     
+     if (mounted) setState(() => _isLoading = false);
+  }
+  
+  bool _isLoading = true; // Add loading state var to class
+  
+
 
   @override
   void dispose() {
@@ -172,7 +244,11 @@ class _JournalEditingScreenState extends State<JournalEditingScreen>
         // ✨ [MODIFY] This is the CORE FIX. Check our state variable.
         if (_currentEntryData == null) {
           // It's a new entry. Call 'add' and get the new docRef.
-          final docRef = await journalProvider.addSharedJournalEntry(coupleId, entryData);
+          final docRef = await journalProvider.addSharedJournalEntry(
+            coupleId, 
+            entryData,
+            isEncryptionEnabled: userProvider.isEncryptionEnforced, // ✨ Pass Preference
+          );
           
           // ✨ [MODIFY] CRITICAL: Update our state variable with the new data and ID.
           setState(() {
@@ -186,7 +262,8 @@ class _JournalEditingScreenState extends State<JournalEditingScreen>
             coupleId, 
             _currentUserId, 
             _currentEntryData!['id'], // ✨ [MODIFY] Use state variable
-            entryData
+            entryData,
+            isEncryptionEnabled: userProvider.isEncryptionEnforced, // ✨ Pass Preference
           );
         }
       } else {
@@ -201,7 +278,11 @@ class _JournalEditingScreenState extends State<JournalEditingScreen>
 
         // ✨ [MODIFY] Apply same fix to personal journals
         if (_currentEntryData == null) {
-          final docRef = await journalProvider.addPersonalJournalEntry(userId, entryData);
+          final docRef = await journalProvider.addPersonalJournalEntry(
+            userId, 
+            entryData,
+            isEncryptionEnabled: userProvider.isEncryptionEnforced, // ✨ Pass Preference
+          );
           // ✨ [MODIFY] CRITICAL: Update our state variable
           setState(() {
             _currentEntryData = entryData;
@@ -211,7 +292,8 @@ class _JournalEditingScreenState extends State<JournalEditingScreen>
           await journalProvider.updatePersonalJournalEntry(
             userId, 
             _currentEntryData!['id'], // ✨ [MODIFY] Use state variable
-            entryData
+            entryData,
+            isEncryptionEnabled: userProvider.isEncryptionEnforced, // ✨ Pass Preference
           );
         }
       }
@@ -419,14 +501,16 @@ class _JournalEditingScreenState extends State<JournalEditingScreen>
                   ),
                 ),
                 Expanded(
-                  child: widget.isShared
-                      ? SharedJournalQuillEditor(
-                          initialSegments: _sharedSegments,
-                          onChanged: (segments) => setState(() => _sharedSegments = segments),
-                          currentUserId: _currentUserId,
-                          partnerUserId: _partnerId,
-                        )
-                      : _buildPersonalEditor(autofocus: _currentEntryData == null),
+                  child: _isLoading 
+                      ? const Center(child: CircularProgressIndicator()) 
+                      : widget.isShared
+                          ? SharedJournalQuillEditor(
+                              initialSegments: _sharedSegments,
+                              onChanged: (segments) => setState(() => _sharedSegments = segments),
+                              currentUserId: _currentUserId,
+                              partnerUserId: _partnerId,
+                            )
+                          : _buildPersonalEditor(autofocus: _currentEntryData == null),
                 ),
                 if (!widget.isShared) _buildStatusBar(),
               ],

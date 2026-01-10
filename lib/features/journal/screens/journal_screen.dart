@@ -9,11 +9,13 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:intl/intl.dart';
 import 'package:shimmer/shimmer.dart';
-import 'package:animate_do/animate_do.dart'; // ✨ --- NEW IMPORT --- ✨
+import 'package:animate_do/animate_do.dart';
 
 import '../../../providers/media_provider.dart';
 import '../../../providers/user_provider.dart';
 import '../../../providers/journal_provider.dart';
+import '../../media/repository/media_repository.dart'; // ✨ Added
+import '../../journal/repository/journal_repository.dart'; // ✨ Added
 import '../../media/widgets/memory_card.dart';
 import '../widgets/journal_tile.dart';
 import 'journal_editing_screen.dart';
@@ -725,7 +727,14 @@ class _JournalScreenState extends State<JournalScreen> with TickerProviderStateM
         child: _AddMemoryBottomSheet(
           onPickImage: _pickImage,
           onUpload: (File imageFile, String text) {
-            _uploadMedia(context.read<MediaProvider>(), context.read<UserProvider>().coupleId!, context.read<UserProvider>().getUserId()!, imageFile, text);
+            _uploadMedia(
+              context.read<MediaProvider>(), 
+              context.read<UserProvider>().coupleId!, 
+              context.read<UserProvider>().getUserId()!, 
+              imageFile, 
+              text,
+              isEncryptionEnabled: context.read<UserProvider>().isEncryptionEnforced
+            );
           },
         ),
       ),
@@ -737,13 +746,8 @@ class _JournalScreenState extends State<JournalScreen> with TickerProviderStateM
     return pickedFile != null ? File(pickedFile.path) : null;
   }
   
-  void _uploadMedia(MediaProvider mediaProvider, String coupleId, String userId, File imageFile, String text) {
-    mediaProvider.uploadMedia(coupleId, imageFile, text, userId)
-      .then((_) {
-        if (mounted) {
-          _showSuccessSnackBar('Memory uploaded successfully!');
-        }
-      })
+  void _uploadMedia(MediaProvider mediaProvider, String coupleId, String userId, File imageFile, String text, {required bool isEncryptionEnabled}) {
+    mediaProvider.uploadMedia(coupleId, imageFile, text, userId, isEncryptionEnabled: isEncryptionEnabled)
       .catchError((e) {
         if (mounted) {
           _showErrorSnackBar('Upload failed: ${e.toString()}');
@@ -869,39 +873,113 @@ class _TimelineEventCard extends StatelessWidget {
   }
 
   Widget _buildItemContent(BuildContext context, JourneyItem item) {
+    // ✨ --- LAZY MIGRATION CHECK ---
+    final coupleId = context.read<UserProvider>().coupleId;
+    if (coupleId != null) {
+       _checkMigration(context, item, coupleId);
+    }
+    
     final data = item.data;
-    if (item.type == 'memory') {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 16.0),
-        child: item.data['isOptimistic'] == true
-            ? _UploadingMemoryCard(imageFile: File(item.data['imageId']))
-            : MemoryCard(
-                docId: data['docId'],
-                imageId: data['imageId'],
-                text: data['text'],
-                isUser: data['createdBy'] == context.read<UserProvider>().getUserId(),
-                createdAt: Timestamp.fromDate(item.timestamp),
-                coupleId: context.read<UserProvider>().coupleId!,
-                onDelete: onDeleteMemory ?? () {},
-                showTextSection: true,
-              ),
-      );
-    } else {
-      return Padding(
-        padding: const EdgeInsets.only(bottom: 16.0),
-        child: JournalTile(
-          title: data['title'],
-          content: data['content'],
-          segments: (data['segments'] is List) ? data['segments'] as List<dynamic> : null,
-          timestamp: Timestamp.fromDate(item.timestamp),
-          journalId: data['id'],
-          isShared: item.type == 'sharedJournal',
-          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => JournalEditingScreen(
-            entryData: data,
+
+    // ✨ --- ROBUST ERROR HANDLING --- ✨
+    try {
+      if (item.type == 'memory') {
+        // ✨ Skip invalid documents only if docId is missing.
+        // If imageId is missing, we'll try to show the card with a placeholder.
+        if (data['docId'] == null) {
+           debugPrint("⚠️ [JournalScreen] SKIP INVALID MEMORY: Missing docId. Data: $data");
+           return const SizedBox.shrink();
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: item.data['isOptimistic'] == true
+              ? _UploadingMemoryCard(imageFile: File(item.data['imageId']))
+              : MemoryCard(
+                  docId: data['docId'] ?? "unknown",
+                  imageId: data['imageId'] ?? "",
+                  text: data['text'] ?? "", // Handle null text
+                  isUser: data['createdBy'] == context.read<UserProvider>().getUserId(),
+                  createdAt: Timestamp.fromDate(item.timestamp),
+                  coupleId: context.read<UserProvider>().coupleId!,
+                  onDelete: onDeleteMemory!,
+                  showTextSection: true,
+                  encryptionVersion: data['encryptionVersion'],
+                  ciphertextId: data['ciphertextId'],
+                  nonceId: data['nonceId'],
+                  macId: data['macId'],
+                  ciphertextText: data['ciphertextText'],
+                  nonceText: data['nonceText'],
+                  macText: data['macText'],
+                ),
+        );
+      } else {
+        // VALIDATE JOURNAL DATA
+        if (data['id'] == null) {
+           debugPrint("⚠️ [JournalScreen] SKIP INVALID JOURNAL: Missing id. Data: $data");
+           return const SizedBox.shrink();
+        }
+
+        return Padding(
+          padding: const EdgeInsets.only(bottom: 16.0),
+          child: JournalTile(
+            title: data['title'] ?? 'Untitled',
+            content: data['content'],
+            segments: (data['segments'] is List) ? data['segments'] as List<dynamic> : null,
+            timestamp: Timestamp.fromDate(item.timestamp),
+            journalId: data['id'] ?? "unknown",
             isShared: item.type == 'sharedJournal',
-          ))),
-        ),
-      );
+            encryptionVersion: data['encryptionVersion'] ?? (
+               item.type == 'sharedJournal' && data['segments'] != null
+               ? (() {
+                   final segs = (data['segments'] as List);
+                   // debugPrint("🔍 [JournalScreen] Shared Journal ${data['id']} Segments: $segs");
+                   return segs.any((s) => s['encryptionVersion'] != null) ? 1 : null;
+                 })()
+               : null
+            ),
+            onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => JournalEditingScreen(
+              entryData: data,
+              isShared: item.type == 'sharedJournal',
+            ))),
+            ciphertext: data['ciphertext'],
+            nonce: data['nonce'],
+            mac: data['mac'],
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint("❌ [JournalScreen] Error building item content: $e. Data: $data");
+      return const SizedBox.shrink();
+    }
+  }
+
+  // ✨ --- HELPER: Trigger lazy migration for old items ---
+  void _checkMigration(BuildContext context, JourneyItem item, String coupleId) {
+    if (item.type == 'memory') {
+       if (item.data['encryptionVersion'] == null && item.data['isOptimistic'] != true) {
+         context.read<MediaRepository>().migrateLegacyMedia(coupleId, item.data['docId'], item.data);
+       }
+    } else if (item.type == 'sharedJournal') {
+       // Check if migration is needed (missing encryption version on segments)
+       bool needsMigration = false;
+       final segments = item.data['segments'];
+       if (segments is List) {
+         for (var seg in segments) {
+           final isTextType = seg['type'] == 'text' || seg['type'] == null;
+           final content = seg['text'] ?? seg['content'];
+           
+           if (isTextType && seg['encryptionVersion'] == null && content != null && (content as String).isNotEmpty) {
+             needsMigration = true;
+             debugPrint("🔍 [JournalScreen] Migration needed for Shared Journal ${item.data['id']} (Segment: $content)");
+             break;
+           }
+         }
+       }
+       
+       if (needsMigration) {
+         context.read<JournalRepository>().migrateLegacySharedJournal(coupleId, item.data['id'], item.data);
+       }
     }
   }
 }
@@ -958,6 +1036,7 @@ class _JournalGridItem extends StatelessWidget {
     final userProvider = context.watch<UserProvider>();
     final data = item.data;
     final isShared = item.type == 'sharedJournal';
+
 
     final ImageProvider userImage = userProvider.getProfileImageSync();
     final ImageProvider partnerImage = userProvider.getPartnerProfileImageSync();
@@ -1080,9 +1159,27 @@ class _JournalGridItem extends StatelessWidget {
                         overflow: TextOverflow.ellipsis,
                       ),
                       const SizedBox(height: 6),
-                      Text(
-                        DateFormat('MMM d, yyyy').format(item.timestamp),
-                        style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: Text(
+                              DateFormat('MMM d, yyyy').format(item.timestamp),
+                              style: theme.textTheme.bodySmall?.copyWith(color: theme.colorScheme.onSurfaceVariant),
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                           // ✨ CHECK SEGMENTS FOR ENCRYPTION IF SHARED
+                           if (data['encryptionVersion'] == 1 || (
+                             isShared && data['segments'] != null && 
+                             (data['segments'] as List).any((s) => s['encryptionVersion'] != null)
+                           )) ...[
+                            const SizedBox(width: 4),
+                            Builder(builder: (context) {
+                              debugPrint("🔒 [UI] Shared Journal Segment IS ENCRYPTED");
+                              return Icon(Icons.lock, size: 12, color: theme.colorScheme.primary.withOpacity(0.7));
+                            }),
+                          ],
+                        ],
                       ),
                     ],
                   ),

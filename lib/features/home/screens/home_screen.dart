@@ -62,11 +62,7 @@ class HomeScreen extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 16.0),
               child: Column(
                 children: [
-                  // ✨ [ADD] RHM Meter Widget
-                  // We place this inside the main padding but before the
-                  // logic that checks for partner connection, so it always shows.
 
-                  // ✨ [END ADD]
 
                   if (isPartnerConnected && coupleId != null)
                     FutureBuilder<bool>(

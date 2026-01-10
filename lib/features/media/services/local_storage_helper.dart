@@ -32,7 +32,9 @@ class LocalStorageHelper {
       }
 
     final directory = await getApplicationDocumentsDirectory();
-    final filePath = "${directory.path}/$imageId.jpg";
+    // ✨ FIX: Sanitize filename
+    final safeFilename = imageId.replaceAll(RegExp(r'[^\w\d]+'), '_');
+    final filePath = "${directory.path}/$safeFilename.jpg";
     final file = File(filePath);
 
     if (await file.exists()) {
@@ -56,10 +58,14 @@ class LocalStorageHelper {
       }
 
       final directory = await getApplicationDocumentsDirectory();
-      final filePath = "${directory.path}/$imageId.jpg";
+      // ✨ FIX: Sanitize filename to handle URLs (remove special chars)
+      final safeFilename = imageId.replaceAll(RegExp(r'[^\w\d]+'), '_');
+      final filePath = "${directory.path}/$safeFilename.jpg";
       final file = File(filePath);
 
-      final imageUrl = "https://drive.google.com/uc?export=view&id=$imageId";
+      final imageUrl = imageId.startsWith('http') 
+          ? imageId 
+          : "https://drive.google.com/uc?export=view&id=$imageId";
       print("📥 LocalStorageHelper: Downloading from URL: $imageUrl");
       Response response = await Dio().download(imageUrl, filePath);
 
@@ -85,7 +91,9 @@ class LocalStorageHelper {
       }
 
       final directory = await getApplicationDocumentsDirectory();
-      final file = File('${directory.path}/$imageId.jpg');
+      // ✨ FIX: Sanitize filename
+      final safeFilename = imageId.replaceAll(RegExp(r'[^\w\d]+'), '_');
+      final file = File('${directory.path}/$safeFilename.jpg');
       await file.writeAsBytes(await imageFile.readAsBytes());
     } catch (e) {
       print("❌ Error saving image locally: $e");

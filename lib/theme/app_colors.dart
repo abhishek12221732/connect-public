@@ -135,4 +135,39 @@ class AppColors {
   static const Color oceanDarkTextPrimary = Color(0xFFcaf0f8);  // Light Sky Blue
   static const Color oceanDarkTextSecondary = Color(0xFF90e0ef); // Muted Cyan
   static const Color oceanDarkOnPrimary = Color(0xFFFFFFFF);
+  // ===========================================================================
+  // ✨ --- NEW: Midnight Pro (OLED) Theme --- ✨
+  // A true black theme with electric blue accents for AMOLED screens.
+  // ===========================================================================
+  static const Color midnightPrimary = Color(0xFF2979FF);    // Electric Blue
+  static const Color midnightSecondary = Color(0xFFFFFFFF);  // White
+  static const Color midnightBackground = Color(0xFF000000);  // True Black
+  static const Color midnightSurface = Color(0xFF121212);    // Almost Black
+  static const Color midnightTextPrimary = Color(0xFFFFFFFF); // White
+  static const Color midnightTextSecondary = Color(0xFFB0B0B0); // Light Grey
+  static const Color midnightOnPrimary = Color(0xFFFFFFFF);
+
+  // ===========================================================================
+  // ✨ --- NEW: Eclipse (Luxury) Theme --- ✨
+  // A premium dark theme with gold and charcoal tones.
+  // ===========================================================================
+  static const Color eclipsePrimary = Color(0xFFFFD700);     // Pure Gold
+  static const Color eclipseSecondary = Color(0xFFBDBDBD);   // Silver
+  static const Color eclipseBackground = Color(0xFF121212);   // Deep Charcoal
+  static const Color eclipseSurface = Color(0xFF1E1E1E);     // Lighter Charcoal
+  static const Color eclipseTextPrimary = Color(0xFFE0E0E0);  // Off-white
+  static const Color eclipseTextSecondary = Color(0xFFADA898); // Muted Gold/Grey
+  static const Color eclipseOnPrimary = Color(0xFF121212);
+
+  // ===========================================================================
+  // ✨ --- NEW: Aurora (Nature) Theme --- ✨
+  // A deep forest/slate theme with neon green/teal accents.
+  // ===========================================================================
+  static const Color auroraPrimary = Color(0xFF00E676);      // Neon Green
+  static const Color auroraSecondary = Color(0xFF00BCD4);    // Cyan
+  static const Color auroraBackground = Color(0xFF0F1C20);    // Deep Forest Slate
+  static const Color auroraSurface = Color(0xFF1A2C32);      // Lighter Slate
+  static const Color auroraTextPrimary = Color(0xFFE0F2F1);   // Pale Mint
+  static const Color auroraTextSecondary = Color(0xFF80CBC4); // Muted Teal
+  static const Color auroraOnPrimary = Color(0xFF0F1C20);
 }

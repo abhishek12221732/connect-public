@@ -12,6 +12,9 @@ import 'package:feelings/widgets/pulsing_dots_indicator.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:feelings/features/chat/widgets/voice_message_bubble.dart';
+import 'package:provider/provider.dart'; 
+import 'package:feelings/providers/chat_provider.dart';
+import 'package:feelings/features/encryption/widgets/encryption_status_bubble.dart'; 
 
 class EnhancedMessageBubble extends StatelessWidget {
   final MessageModel message;
@@ -32,9 +35,13 @@ class EnhancedMessageBubble extends StatelessWidget {
   });
 
   String _getProxiedUrl(String imageId, {bool highQuality = false}) {
-    final googleUrl = "https://drive.google.com/uc?export=view&id=$imageId";
+    // ✨ FIX: Support direct URLs (e.g. Cloudinary) by not wrapping them in Google Drive logic
+    final String urlToProxy = imageId.startsWith('http') 
+        ? imageId 
+        : "https://drive.google.com/uc?export=view&id=$imageId";
+        
     final size = highQuality ? "w=1200" : "w=600&h=600";
-    return "https://images.weserv.nl/?url=${Uri.encodeComponent(googleUrl)}&$size&fit=cover";
+    return "https://images.weserv.nl/?url=${Uri.encodeComponent(urlToProxy)}&$size&fit=cover";
   }
 
   /// Builds the widget to display the chat image
@@ -141,7 +148,7 @@ class EnhancedMessageBubble extends StatelessWidget {
         maxWidth: MediaQuery.of(context).size.width * 0.70,
       ),
       child: ClipRRect(
-        borderRadius: BorderRadius.circular(15.0),
+        borderRadius: BorderRadius.circular(14.0),
         child: AspectRatio(
           aspectRatio: 1.0,
           child: imageWidget,
@@ -232,20 +239,20 @@ class EnhancedMessageBubble extends StatelessWidget {
                       ? theme.colorScheme.primary
                       : theme.colorScheme.surface,
                   borderRadius: BorderRadius.only(
-                    topLeft: const Radius.circular(20),
-                    topRight: const Radius.circular(20),
+                    topLeft: const Radius.circular(18),
+                    topRight: const Radius.circular(18),
                     bottomLeft: isMe
-                        ? const Radius.circular(20)
+                        ? const Radius.circular(18)
                         : const Radius.circular(4),
                     bottomRight: isMe
                         ? const Radius.circular(4)
-                        : const Radius.circular(20),
+                        : const Radius.circular(18),
                   ),
                   boxShadow: [
                     BoxShadow(
-                      color: theme.colorScheme.outline.withOpacity(0.15),
-                      blurRadius: 8,
-                      offset: const Offset(0, 2),
+                      color: theme.colorScheme.shadow.withOpacity(0.08),
+                      blurRadius: 6,
+                      offset: const Offset(0, 1),
                     ),
                   ],
                 ),
@@ -256,75 +263,96 @@ class EnhancedMessageBubble extends StatelessWidget {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                           Padding(
-                            padding: (isImageMessage || isVoiceMessage) // ✨ Add voice check
-                                ? const EdgeInsets.fromLTRB(8, 8, 8, 0)
-                                : const EdgeInsets.fromLTRB(13, 9, 13, 0),
-                            child: _buildReplyContent(context, theme),
-                          ),
+                          // Reply content with conditional padding
+                          if (isImageMessage || isVoiceMessage)
+                            _buildReplyContent(context, theme, isImageMessage, isVoiceMessage)
+                          else
+                            Padding(
+                              padding: const EdgeInsets.fromLTRB(13, 9, 13, 0),
+                              child: _buildReplyContent(context, theme, isImageMessage, isVoiceMessage),
+                            ),
                           if (isImageMessage)
-                            GestureDetector(
-                              onTap: () => _showImageGallery(context),
-                              child: Hero(
-                                tag: message.id,
-                                child: _buildImageView(context),
+                            Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 4),
+                              child: GestureDetector(
+                                onTap: () => _showImageGallery(context),
+                                child: Hero(
+                                  tag: message.id,
+                                  child: _buildImageView(context),
+                                ),
                               ),
                             ),
 
                             if (isVoiceMessage)
                             Padding(
-                              padding: const EdgeInsets.fromLTRB(8, 4, 8, 4),
+                              padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
                               child: VoiceMessageBubble(
                                 message: message,
                                 isMe: isMe,
+                                // ✨ CONNECT DECRYPTION LOGIC
+                                onPrepareAudio: (msg) => 
+                                Provider.of<ChatProvider>(context, listen: false)
+                                .prepareAudioFile(msg),
                               ),
                             ),
                           if (!isImageMessage && !isVoiceMessage && message.content.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(13, 9, 13, 9),
-                              child: _buildMessageTextOrHighlight(
-                                  context, message.content, highlightQuery, theme),
-                            ),
-                          if (!isImageMessage && !isVoiceMessage && message.content.isNotEmpty)
-                            Padding(
-                              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-                              child: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Text(
-                                    _formatTime(message.timestamp.toLocal()),
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: isMe
-                                          ? theme.colorScheme.onPrimary
-                                              .withOpacity(0.7)
-                                          : theme.colorScheme.onSurface
-                                              .withOpacity(0.7),
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                  if (message.editedAt != null) ...[
-                                    const SizedBox(width: 6),
-                                    Text(
-                                      'edited',
-                                      style:
-                                          theme.textTheme.labelSmall?.copyWith(
-                                        color: isMe
-                                            ? theme.colorScheme.onPrimary
-                                                .withOpacity(0.7)
-                                            : theme.colorScheme.onSurface
-                                                .withOpacity(0.7),
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.w500,
-                                      ),
+                            IntrinsicWidth(
+                              child: Padding(
+                                padding: const EdgeInsets.fromLTRB(10, 6, 10, 6),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    // Message text
+                                    _buildMessageTextOrHighlight(
+                                        context, message.content, highlightQuery, theme),
+                                    const SizedBox(height: 3),
+                                    // Timestamp row - aligned right
+                                    Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      mainAxisSize: MainAxisSize.min,
+                                      children: [
+                                        if (message.editedAt != null)
+                                          Padding(
+                                            padding: const EdgeInsets.only(right: 4),
+                                            child: Text(
+                                              'edited',
+                                              style: theme.textTheme.labelSmall?.copyWith(
+                                                color: isMe
+                                                    ? theme.colorScheme.onPrimary.withOpacity(0.6)
+                                                    : theme.colorScheme.onSurface.withOpacity(0.5),
+                                                fontSize: 10,
+                                              ),
+                                            ),
+                                          ),
+                                        Text(
+                                          _formatTime(message.timestamp.toLocal()),
+                                          style: theme.textTheme.labelSmall?.copyWith(
+                                            color: isMe
+                                                ? theme.colorScheme.onPrimary.withOpacity(0.6)
+                                                : theme.colorScheme.onSurface.withOpacity(0.5),
+                                            fontSize: 10,
+                                          ),
+                                        ),
+                                        // ✨ Lock Icon for Encrypted Messages
+                                        if (message.encryptionVersion == 1) ...[
+                                          const SizedBox(width: 2),
+                                          Icon(
+                                            Icons.lock,
+                                            size: 10,
+                                            color: isMe
+                                                ? theme.colorScheme.onPrimary.withOpacity(0.6)
+                                                : theme.colorScheme.onSurface.withOpacity(0.5),
+                                          ),
+                                        ],
+                                        if (isMe) ...[
+                                          const SizedBox(width: 3),
+                                          _buildMessageStatus(context, message.status, theme),
+                                        ],
+                                      ],
                                     ),
                                   ],
-                                  if (isMe) ...[
-                                    const SizedBox(width: 6),
-                                    _buildMessageStatus(
-                                        context, message.status, theme),
-                                  ],
-                                ],
+                                ),
                               ),
                             ),
                         ],
@@ -338,6 +366,14 @@ class EnhancedMessageBubble extends StatelessWidget {
                         child: _buildImageOverlay(context, theme),
                       ),
 
+                      if (isVoiceMessage) ...[
+                        Builder(builder: (context) {
+                          // Debug print
+                          if (message.audioEncryptionVersion == 1) debugPrint("🔒 [UI] Voice Message IS ENCRYPTED (v1)");
+                          else debugPrint("🔓 [UI] Voice Message NOT encrypted (v=${message.audioEncryptionVersion})");
+                          return const SizedBox.shrink();
+                        }),
+                      ],
                       if (isVoiceMessage)
                       Positioned(
                         bottom: 8,
@@ -345,6 +381,17 @@ class EnhancedMessageBubble extends StatelessWidget {
                         child: Row(
                           mainAxisSize: MainAxisSize.min,
                           children: [
+                             // ✨ Lock Icon for Encrypted Voice
+                            if (message.encryptionVersion == 1 || (isVoiceMessage && message.audioEncryptionVersion == 1)) ...[
+                              Icon(
+                                Icons.lock,
+                                size: 10,
+                                color: isMe
+                                    ? theme.colorScheme.onPrimary.withOpacity(0.7)
+                                    : theme.colorScheme.onSurface.withOpacity(0.7),
+                              ),
+                              const SizedBox(width: 4),
+                            ],
                             if (message.editedAt != null) ...[
                               Text(
                                 'edited',
@@ -417,6 +464,15 @@ class EnhancedMessageBubble extends StatelessWidget {
                     fontWeight: FontWeight.w500,
                   ),
                 ),
+                // ✨ Lock Icon for Encrypted Images (Overlay)
+                if (message.encryptionVersion == 1) ...[
+                  const SizedBox(width: 2),
+                  Icon(
+                    Icons.lock,
+                    size: 10,
+                    color: Colors.white.withOpacity(0.9),
+                  ),
+                ],
                 if (message.editedAt != null) ...[
                   const SizedBox(width: 6),
                   Text(
@@ -459,6 +515,15 @@ class EnhancedMessageBubble extends StatelessWidget {
                   fontWeight: FontWeight.w500,
                 ),
               ),
+              // ✨ Lock Icon for Encrypted Images (No Caption)
+              if (message.encryptionVersion == 1) ...[
+                const SizedBox(width: 2),
+                Icon(
+                  Icons.lock,
+                  size: 10,
+                  color: Colors.white.withOpacity(0.9),
+                ),
+              ],
               if (message.editedAt != null) ...[
                 const SizedBox(width: 6),
                 Text(
@@ -491,15 +556,24 @@ class EnhancedMessageBubble extends StatelessWidget {
 
   // ✨ Helper to get proxied URL (for the reply thumbnail)
   String _getReplyProxiedUrl(String imageId) {
-    final googleUrl = "https://drive.google.com/uc?export=view&id=$imageId";
-    return "https://images.weserv.nl/?url=${Uri.encodeComponent(googleUrl)}&w=100&h=100&fit=cover";
+    // ✨ FIX: Support direct URLs
+    final String urlToProxy = imageId.startsWith('http') 
+        ? imageId 
+        : "https://drive.google.com/uc?export=view&id=$imageId";
+        
+    return "https://images.weserv.nl/?url=${Uri.encodeComponent(urlToProxy)}&w=100&h=100&fit=cover";
   }
 
-  Widget _buildReplyContent(BuildContext context, ThemeData theme) {
+  Widget _buildReplyContent(BuildContext context, ThemeData theme, bool isImageMessage, bool isVoiceMessage) {
     // ✨ Check for the new reply type fields
     if (message.repliedToMessageId == null) {
       return const SizedBox.shrink();
     }
+    
+    // ✨ Only apply padding for image/voice messages (text messages get padding from outer wrapper)
+    final EdgeInsets? contentPadding = (isImageMessage || isVoiceMessage)
+        ? const EdgeInsets.fromLTRB(8, 8, 8, 0)
+        : null;
     
     final bool isImageReply = message.repliedToMessageType == 'image';
     // ✨ Safely handle replyText. Use caption, or "Image", or empty string.
@@ -539,7 +613,7 @@ class EnhancedMessageBubble extends StatelessWidget {
     }
     // ... (end of color logic)
 
-    return Container(
+    final replyContainer = Container(
       margin: const EdgeInsets.only(bottom: 8),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
       decoration: BoxDecoration(
@@ -555,7 +629,8 @@ class EnhancedMessageBubble extends StatelessWidget {
       child: Row( // ✨ Wrap in a Row
         mainAxisSize: MainAxisSize.min,
         children: [
-          Expanded(
+          Flexible(
+            fit: FlexFit.loose,
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
@@ -593,6 +668,16 @@ class EnhancedMessageBubble extends StatelessWidget {
         ],
       ),
     );
+    
+    // Only wrap with padding for image/voice messages
+    if (contentPadding != null) {
+      return Padding(
+        padding: contentPadding,
+        child: replyContainer,
+      );
+    }
+    
+    return replyContainer;
   }
 
   Widget _buildMessageTextOrHighlight(
@@ -602,6 +687,15 @@ class EnhancedMessageBubble extends StatelessWidget {
     ThemeData theme, {
     Color? forceColor,
   }) {
+    // ✨ CHECK FOR ENCRYPTION STATUS
+    if (text == "⏳ Waiting for key...") {
+      return EncryptionStatusBubble(status: 'waiting', isMe: isMe);
+    } else if (text == "🔒 Decryption Failed") {
+      return EncryptionStatusBubble(status: 'failed', isMe: isMe);
+    } else if (text == "🔒 Encrypted Message") {
+      return EncryptionStatusBubble(status: 'locked', isMe: isMe);
+    }
+
     final Color mainColor =
         forceColor ?? (isMe ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface);
     final Color linkColor =
@@ -613,10 +707,12 @@ class EnhancedMessageBubble extends StatelessWidget {
         onOpen: _openLink,
         options: const LinkifyOptions(humanize: false, removeWww: false),
         style: theme.textTheme.bodyLarge
-            ?.copyWith(color: mainColor, fontSize: 16, height: 1.3),
+            ?.copyWith(color: mainColor, fontSize: 15, height: 1.3),
         linkStyle: TextStyle(
             color: linkColor,
             decoration: TextDecoration.underline,
+            decorationColor: linkColor,
+            decorationThickness: 2,
             fontWeight: FontWeight.w600),
         maxLines: null,
         textAlign: TextAlign.start,
@@ -653,7 +749,7 @@ class EnhancedMessageBubble extends StatelessWidget {
     return RichText(
       text: TextSpan(
         style: theme.textTheme.bodyLarge
-            ?.copyWith(color: mainColor, fontSize: 16, height: 1.3),
+            ?.copyWith(color: mainColor, fontSize: 15, height: 1.3),
         children: spans,
       ),
     );

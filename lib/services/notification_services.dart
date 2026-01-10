@@ -13,6 +13,8 @@ import 'package:feelings/main.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:provider/provider.dart';
 import 'package:feelings/providers/user_provider.dart';
+import 'package:feelings/features/chat/repositories/chat_repository.dart';
+import 'package:feelings/features/auth/services/user_repository.dart';
 import 'package:feelings/providers/couple_provider.dart';
 
 
@@ -104,7 +106,7 @@ class NotificationService {
     // ✨ [MOVED] Timezone configuration is now centralized here.
     await _configureTimeZones();
 
-    // ✨ [ADDED] Explicitly create the reminder channel.
+    // ✨ Create the reminder channel
     final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
         _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
     if (androidImplementation != null) {
@@ -164,10 +166,6 @@ class NotificationService {
     if (onNotificationClick != null) {
       onNotificationClick!();
     }
-    final String? payload = response.payload;
-    if (payload != null) {
-      // print('Notification tapped (iOS 10+ / Android): Payload: $payload');
-    }
   }
 
   // (NEW) Method to dismiss a specific notification when its message is seen.
@@ -191,77 +189,86 @@ class NotificationService {
         .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
         ?.createNotificationChannel(channel);
   }
-
+  
   // (MODIFIED) This method now takes the full RemoteMessage to access the data payload
   // for creating a unique notification ID.
  // (MODIFIED) This method now uses a dynamic channel ID to match the created channel.
 // (MODIFIED) This method now customizes the content of individual and summary notifications.
 static Future<void> _showNotification(RemoteMessage message) async {
-  final notification = message.notification;
-  if (notification == null) return;
+  // 1. REMOVED: if (message.notification == null) return; 
+  // We want to show notifications even if they are data-only payloads.
 
   // --- Get Data and Define Keys ---
-  final String? messageId = message.data['messageId'];
-  final String? partnerName = message.data['partnerName'];
-  final String? messageText = message.data['messageText'];
+  final data = message.data;
+  final notification = message.notification;
 
-  // // Debug logging to see what we're receiving
-  // print('NotificationService: FCM notification title = ${notification.title}');
-  // print('NotificationService: FCM notification body = ${notification.body}');
-  // print('NotificationService: FCM data partnerName = $partnerName');
-  // print('NotificationService: FCM data messageText = $messageText');
-  // print('NotificationService: FCM data messageId = $messageId');
+  // Extract data with fallbacks
+  final String? messageId = data['messageId'];
+  final String? partnerName = data['partnerName'];
+  final String? senderId = data['senderId'];
+  final String? receiverId = data['receiverId'];
+  
+  // Prioritize data payload for body, fallback to notification body, finally default text
+  final String body = data['messageText'] ?? notification?.body ?? 'You have a new message';
+  
+  // Use partner name as title, or "New Message" if null
+  final String title = partnerName ?? notification?.title ?? "New Message";
 
-  // Use a timestamp-based ID to help with ordering
+  // Build enhanced payload: "messageId|senderId|receiverId|partnerName"
+  final String payload = '${messageId ?? ""}|${senderId ?? ""}|${receiverId ?? ""}|${partnerName ?? ""}';
+
   final int messageNotificationId = (messageId?.hashCode ?? DateTime.now().millisecondsSinceEpoch).abs() % 1000000;
-  // Add a timestamp component to help with ordering in grouped view
   final int orderedNotificationId = messageNotificationId + (DateTime.now().millisecondsSinceEpoch % 1000);
-  // final String title = partnerName ?? "New Message";
-  final String body = messageText ?? notification.body ?? 'You have a new message';
 
-  // print('NotificationService: Final title = $title');
-  // print('NotificationService: Final body = $body');
-
-  // (FIX) Create a unique group key AND summary ID for each partner
-  // This ensures chats from different people do not mix.
   final String groupKey = 'chat_${partnerName ?? "default"}';
   final int groupSummaryId = (partnerName?.hashCode ?? 0);
 
-  final String channelId = 'chat_${(partnerName ?? "default").toLowerCase().replaceAll(' ', '_')}';
-  final String channelName = partnerName ?? 'Chat Messages';
+  // sanitize channel ID
+  final String safeChannelId = 'chat_${(partnerName ?? "default").toLowerCase().replaceAll(RegExp(r'[^a-z0-9_]'), '_')}';
+  final String safeChannelName = partnerName ?? 'Chat Messages';
 
   // --- ANDROID NOTIFICATION DETAILS ---
+  
+  // 2. ADDED: Ensure Channel Exists before showing
+  final AndroidFlutterLocalNotificationsPlugin? androidImplementation =
+      _localNotifications.resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>();
+      
+  if (androidImplementation != null) {
+    await androidImplementation.createNotificationChannel(AndroidNotificationChannel(
+      safeChannelId,
+      safeChannelName,
+      description: 'Chat notifications from $safeChannelName',
+      importance: Importance.max,
+    ));
+  }
 
-  // Details for the individual message notification
   final AndroidNotificationDetails androidDetails = AndroidNotificationDetails(
-    channelId,
-    channelName,
+    safeChannelId,
+    safeChannelName,
     importance: Importance.max,
     priority: Priority.high,
-    groupKey: groupKey, // Use partner-specific group key
+    groupKey: groupKey,
   );
 
-  // Details for the group summary notification
   final AndroidNotificationDetails groupSummaryNotificationDetails = AndroidNotificationDetails(
-    channelId,
-    channelName,
+    safeChannelId,
+    safeChannelName,
     importance: Importance.max,
     priority: Priority.high,
-    groupKey: groupKey, // Use partner-specific group key
+    groupKey: groupKey,
     setAsGroupSummary: true,
-    styleInformation: InboxStyleInformation(
-      [], // Let the system build the lines from the individual notifications
-      contentTitle: null, // (FIX) Remove title from grouped messages
+    styleInformation: const InboxStyleInformation(
+      [],
+      contentTitle: null, 
       summaryText: 'New messages',
     ),
   );
 
-  // --- iOS DETAILS ---
   final DarwinNotificationDetails iOSDetails = DarwinNotificationDetails(
     presentAlert: true,
     presentBadge: true,
     presentSound: true,
-    threadIdentifier: groupKey, // Use partner-specific group key for iOS grouping
+    threadIdentifier: groupKey,
   );
 
   final NotificationDetails details = NotificationDetails(
@@ -271,25 +278,23 @@ static Future<void> _showNotification(RemoteMessage message) async {
 
   // --- SHOW NOTIFICATIONS ---
 
-  // 1. Show the individual message notification
-  // We pass 'null' as the title so only the body appears in the summary list.
+  // Show individual message
   await _localNotifications.show(
     orderedNotificationId,
-    null, // (FIX) No title for individual messages in grouped view
-    body,  // Body is the message content
+    title,
+    body,
     details,
   );
 
-  // 2. Show the group summary notification
-  // The title/body here control the look of the COLLAPSED group.
+  // Show group summary
   await _localNotifications.show(
-    groupSummaryId, // Use a partner-specific ID for the summary
-    null,           // (FIX) Remove title from grouped messages
-    body,           // Collapsed Body = The latest message
+    groupSummaryId,
+    null,
+    body, 
     NotificationDetails(android: groupSummaryNotificationDetails),
   );
-} 
-  
+}
+
   
   static Future<void> _configureTimeZones() async {
     try {

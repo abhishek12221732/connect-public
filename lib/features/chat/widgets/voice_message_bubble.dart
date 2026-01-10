@@ -2,22 +2,27 @@
 
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:audio_waveforms/audio_waveforms.dart';
 import 'package:feelings/features/chat/models/message_model.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/foundation.dart';
+import 'package:provider/provider.dart';
+import 'package:feelings/providers/chat_provider.dart';
+import 'package:feelings/providers/user_provider.dart';
 
 class VoiceMessageBubble extends StatefulWidget {
   final MessageModel message;
   final bool isMe;
+  final Future<String> Function(MessageModel)? onPrepareAudio;
 
   const VoiceMessageBubble({
     super.key,
     required this.message,
     required this.isMe,
+    this.onPrepareAudio,
   });
 
   @override
@@ -25,13 +30,12 @@ class VoiceMessageBubble extends StatefulWidget {
 }
 
 class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
-    with TickerProviderStateMixin {
+    with SingleTickerProviderStateMixin {
   
   final AudioPlayer _audioPlayer = AudioPlayer();
-  PlayerController _waveformController = PlayerController();
 
   bool _isPlaying = false;
-  bool _isLoading = true;
+  bool _isLoading = true; // Start as loading
   bool _hasError = false;
   Duration _totalDuration = Duration.zero;
   Duration _currentPosition = Duration.zero;
@@ -40,10 +44,7 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
   StreamSubscription? _positionSubscription;
   StreamSubscription? _durationSubscription;
 
-  bool _waveformLoaded = false;
-
   late final AnimationController _uploadAnimController;
-  late final AnimationController _playPauseController;
 
   @override
   void initState() {
@@ -53,181 +54,184 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
       duration: const Duration(milliseconds: 1200),
     );
     
-    _playPauseController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 250),
-    );
-    
+    // Start animation if uploading
     if (widget.message.uploadStatus == 'uploading') {
       _uploadAnimController.repeat();
+    } else {
+      // If already sent/received, init immediately
+      _initAudio();
     }
+  }
+
+  // ✨ Resend Logic
+  bool _isResending = false;
+
+  Future<void> _handleResend() async {
+    if (_isResending) return;
+    setState(() => _isResending = true);
+
+    try {
+      final userProvider = context.read<UserProvider>();
+      final chatProvider = context.read<ChatProvider>();
+      final isEncryptionEnabled = userProvider.isEncryptionEnforced;
+
+      if (widget.message.localAudioPath == null) return;
+      final file = File(widget.message.localAudioPath!);
+      if (!file.existsSync()) return;
+      
+      await chatProvider.resendExpiredAudio(
+        message: widget.message,
+        audioFile: file,
+        isEncryptionEnabled: isEncryptionEnabled,
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text("Voice message restored successfully!")),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text("Resend failed: $e")),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _isResending = false);
+    }
+  }
+
+  // ✨ CRITICAL FIX: React when upload finishes
+  @override
+  void didUpdateWidget(VoiceMessageBubble oldWidget) {
+    super.didUpdateWidget(oldWidget);
     
-    _initAudio();
+    // If status changed from uploading -> sent/failed
+    if (oldWidget.message.uploadStatus == 'uploading' &&
+        widget.message.uploadStatus != 'uploading') {
+      
+      _uploadAnimController.stop();
+      _initAudio();
+    }
   }
 
   Future<void> _initAudio() async {
-    final msgId = widget.message.id;
-    debugPrint("------------------------------------------");
-    debugPrint("[VOICE_DEBUG $msgId] _initAudio START");
-
-    if (widget.message.uploadStatus == 'uploading') {
-      debugPrint("[VOICE_DEBUG $msgId] Status: UPLOADING. Exiting.");
-      return;
-    }
+    // 1. Guard clauses
+    if (!mounted) return;
+    if (widget.message.uploadStatus == 'uploading') return;
+    
     if (widget.message.uploadStatus == 'failed') {
-      debugPrint("[VOICE_DEBUG $msgId] Status: FAILED. Exiting.");
-      setState(() {
-        _isLoading = false;
-        _hasError = true;
-      });
+      if(mounted) setState(() { _isLoading = false; _hasError = true; });
       return;
     }
 
     try {
-      String? audioPathForPlayer;
-      String? audioPathForWaveform;
+      String? audioPath;
 
-      if (widget.message.localAudioPath != null &&
+      // 2. Prepare the Audio (Decrypt/Download)
+      if (widget.onPrepareAudio != null) {
+        // ✨ This is where we decrypt
+        audioPath = await widget.onPrepareAudio!(widget.message);
+      } 
+      // Fallback for old/legacy messages
+      else if (widget.message.localAudioPath != null &&
           File(widget.message.localAudioPath!).existsSync()) {
-        
-        audioPathForPlayer = widget.message.localAudioPath!;
-        audioPathForWaveform = widget.message.localAudioPath!;
-        debugPrint("[VOICE_DEBUG $msgId] Using localAudioPath: $audioPathForPlayer");
-
-      } 
-      else if (widget.message.audioUrl != null) {
-        debugPrint("[VOICE_DEBUG $msgId] No local path. Using audioUrl: ${widget.message.audioUrl}");
-        
-        final appDir = await getApplicationDocumentsDirectory();
-        final localFilePath = '${appDir.path}/audio_cache/audio_${widget.message.id}.m4a';
-        final localFile = File(localFilePath);
-
-        await localFile.parent.create(recursive: true);
-
-        if (!await localFile.exists()) {
-          debugPrint("[VOICE_DEBUG $msgId] Downloading to PERSISTENT path: $localFilePath");
-          await Dio().download(widget.message.audioUrl!, localFilePath);
-          debugPrint("[VOICE_DEBUG $msgId] Download complete.");
-        } else {
-          debugPrint("[VOICE_DEBUG $msgId] Using persistent file: $localFilePath");
-        }
-        
-        audioPathForPlayer = localFilePath;
-        audioPathForWaveform = localFilePath;
-
-      } 
-      else {
-         debugPrint("[VOICE_DEBUG $msgId] CRITICAL: No localAudioPath or audioUrl found. Setting error.");
-         setState(() {
-           _isLoading = false;
-           _hasError = true;
-         });
-         return;
+        audioPath = widget.message.localAudioPath!;
+      } else if (widget.message.audioUrl != null) {
+         // Legacy download logic...
+         final appDir = await getApplicationDocumentsDirectory();
+         final localFilePath = '${appDir.path}/audio_cache/audio_${widget.message.id}.m4a';
+         final file = File(localFilePath);
+         if (!await file.exists()) {
+  await Dio().download(widget.message.audioUrl!, localFilePath);
+}
+         audioPath = localFilePath;
       }
 
-      debugPrint("[VOICE_DEBUG $msgId] Initializing player with: $audioPathForPlayer");
-      final duration = await _audioPlayer.setFilePath(audioPathForPlayer);
-      _totalDuration = duration ?? Duration.zero;
-      debugPrint("[VOICE_DEBUG $msgId] Player initialized. Duration: $_totalDuration");
-
-      try {
-        debugPrint("[VOICE_DEBUG $msgId] Initializing waveform with: $audioPathForWaveform");
-        _waveformController = PlayerController();
-        await _waveformController.preparePlayer(
-          path: audioPathForWaveform,
-          shouldExtractWaveform: true,
-          noOfSamples: 100,
-          volume: 1.0,
-        );
-        
-        _waveformController.seekTo(0);
-        
-        debugPrint("[VOICE_DEBUG $msgId] Waveform initialized SUCCESSFULLY.");
-        if (mounted) setState(() => _waveformLoaded = true);
-      } catch (e) {
-        debugPrint("[VOICE_DEBUG $msgId] ⚠️ WAVEFORM FAILED TO LOAD: $e");
+      // 3. Verify path exists before loading
+      if (audioPath == null || !File(audioPath).existsSync()) {
+        print("❌ [VoiceBubble] Audio file not found at: $audioPath");
+        if(mounted) setState(() { _isLoading = false; _hasError = true; });
+        return;
       }
-      
-      _playerStateSubscription = _audioPlayer.playerStateStream.listen((state) {
-        if (mounted) {
-          setState(() {
-            _isPlaying = state.playing;
-            _isLoading = state.processingState == ProcessingState.loading || state.processingState == ProcessingState.buffering;
-          });
-        }
-        
-        if (state.processingState == ProcessingState.completed) {
-          _audioPlayer.seek(Duration.zero);
-          _audioPlayer.pause();
-          _waveformController.seekTo(0);
-          _playPauseController.reverse();
-          if(mounted) setState(() => _currentPosition = Duration.zero);
-        }
-      });
 
-      _positionSubscription = _audioPlayer.positionStream.listen((pos) {
-        if (mounted) {
-          setState(() => _currentPosition = pos);
-          
-          if (_isPlaying && pos.inMilliseconds > 0) {
-            _waveformController.seekTo(pos.inMilliseconds);
-          }
-        }
-      });
-
-      _durationSubscription = _audioPlayer.durationStream.listen((dur) {
-        if (mounted) {
-          setState(() => _totalDuration = dur ?? Duration.zero);
-        }
-      });
+      // 4. Load into Player
+      final duration = await _audioPlayer.setFilePath(audioPath);
       
-      debugPrint("[VOICE_DEBUG $msgId] _initAudio SUCCESS. Setting isLoading = false");
+      // 5. Setup Listeners
+      _setupListeners(duration);
+      
       if (mounted) setState(() => _isLoading = false);
 
-    } catch (e, stackTrace) {
-      debugPrint("[VOICE_DEBUG ${widget.message.id}] ❌❌❌ CATASTROPHIC ERROR in _initAudio: $e");
-      debugPrint("[VOICE_DEBUG ${widget.message.id}] StackTrace: $stackTrace");
+    } catch (e) {
+      debugPrint('❌ [VoiceBubble] Error initializing audio: $e');
       if (mounted) {
         setState(() {
           _isLoading = false;
           _hasError = true;
-          _waveformLoaded = false;
         });
       }
     }
   }
 
+  void _setupListeners(Duration? duration) {
+    _totalDuration = duration ?? Duration.zero;
+      
+    _playerStateSubscription = _audioPlayer.playerStateStream.listen((state) {
+      if (mounted) {
+        setState(() {
+          _isPlaying = state.playing;
+          // Only show loading if buffering, NOT during init (handled separately)
+          if (state.processingState == ProcessingState.buffering) {
+             _isLoading = true;
+          } else if (state.processingState == ProcessingState.ready) {
+             _isLoading = false;
+          }
+        });
+      }
+      
+      if (state.processingState == ProcessingState.completed) {
+        _audioPlayer.seek(Duration.zero);
+        _audioPlayer.pause();
+        if(mounted) setState(() => _currentPosition = Duration.zero);
+      }
+    });
+
+    _positionSubscription = _audioPlayer.positionStream.listen((pos) {
+      if (mounted) setState(() => _currentPosition = pos);
+    });
+
+    _durationSubscription = _audioPlayer.durationStream.listen((dur) {
+      if (mounted) setState(() => _totalDuration = dur ?? Duration.zero);
+    });
+  }
+
   @override
   void dispose() {
     _uploadAnimController.dispose();
-    _playPauseController.dispose();
     _playerStateSubscription?.cancel();
     _positionSubscription?.cancel();
     _durationSubscription?.cancel();
-    _waveformController.dispose();
     _audioPlayer.dispose();
     super.dispose();
   }
 
   void _togglePlayPause() {
-    if (_hasError || _isLoading) return;
+    if (_hasError) return;
+    // Don't block tap if loading, sometimes player needs a nudge
     
     if (_isPlaying) {
       _audioPlayer.pause();
-      _playPauseController.reverse();
     } else {
       if (_currentPosition >= _totalDuration && _totalDuration.inSeconds > 0) {
         _audioPlayer.seek(Duration.zero);
-        _waveformController.seekTo(0);
-        setState(() => _currentPosition = Duration.zero);
-      } else {
-        _waveformController.seekTo(_currentPosition.inMilliseconds);
+        if(mounted) setState(() => _currentPosition = Duration.zero);
       }
       _audioPlayer.play();
-      _playPauseController.forward();
     }
   }
 
+  // ... (Keep helper methods like _formatDuration, _buildUploadingWidget, _buildLoadingAnimation same as before)
   String _formatDuration(Duration d) {
     String twoDigits(int n) => n.toString().padLeft(2, '0');
     final minutes = twoDigits(d.inMinutes.remainder(60));
@@ -236,36 +240,17 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
   }
 
   Widget _buildUploadingWidget(Color color) {
-    final double minHeight = 6.0;
-    final double maxHeight = 20.0;
-    
-    final List<Animation<double>> animations = [
-      TweenSequence<double>([
-        TweenSequenceItem(tween: Tween(begin: minHeight, end: maxHeight), weight: 1),
-        TweenSequenceItem(tween: Tween(begin: maxHeight, end: minHeight), weight: 1),
-      ]).animate(CurvedAnimation(parent: _uploadAnimController, curve: Interval(0.0, 0.6, curve: Curves.easeInOut))),
-      
-      TweenSequence<double>([
-        TweenSequenceItem(tween: Tween(begin: minHeight, end: maxHeight), weight: 1),
-        TweenSequenceItem(tween: Tween(begin: maxHeight, end: minHeight), weight: 1),
-      ]).animate(CurvedAnimation(parent: _uploadAnimController, curve: Interval(0.2, 0.8, curve: Curves.easeInOut))),
-      
-      TweenSequence<double>([
-        TweenSequenceItem(tween: Tween(begin: minHeight, end: maxHeight), weight: 1),
-        TweenSequenceItem(tween: Tween(begin: maxHeight, end: minHeight), weight: 1),
-      ]).animate(CurvedAnimation(parent: _uploadAnimController, curve: Interval(0.4, 1.0, curve: Curves.easeInOut))),
-    ];
-
     return AnimatedBuilder(
       animation: _uploadAnimController,
       builder: (context, child) {
         return Row(
           mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.center, // <-- Center vertically
+          crossAxisAlignment: CrossAxisAlignment.center,
           children: List.generate(3, (index) {
+            final value = (math.sin((_uploadAnimController.value * 2 * math.pi) + (index * math.pi / 3)) + 1) / 2;
             return Container(
               margin: const EdgeInsets.symmetric(horizontal: 2),
-              height: animations[index].value,
+              height: 6 + (value * 14),
               width: 4.0,
               decoration: BoxDecoration(
                 color: color.withOpacity(0.7),
@@ -278,116 +263,214 @@ class _VoiceMessageBubbleState extends State<VoiceMessageBubble>
     );
   }
 
+  Widget _buildLoadingAnimation(Color color) {
+    if (!_uploadAnimController.isAnimating) {
+      _uploadAnimController.repeat();
+    }
+    
+    return AnimatedBuilder(
+      animation: _uploadAnimController,
+      builder: (context, child) {
+        return Center(
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: List.generate(3, (index) {
+              final offset = index * (2 * math.pi / 3);
+              final value = (math.sin((_uploadAnimController.value * 2 * math.pi) + offset) + 1) / 2;
+              return Container(
+                margin: const EdgeInsets.symmetric(horizontal: 1.5),
+                height: 4 + (value * 12),
+                width: 3.0,
+                decoration: BoxDecoration(
+                  color: color,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              );
+            }),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final color = widget.isMe ? theme.colorScheme.onPrimary : theme.colorScheme.onSurface;
 
-    // ✨ --- THIS IS THE FIX --- ✨
-    // Reverted this block to the simpler version
+    // Check availability
+    final bool isCached = widget.message.localAudioPath != null && 
+                          File(widget.message.localAudioPath!).existsSync();
+    final bool isExpiredButCached = widget.message.audioUrl == null && isCached;
+
+    // Uploading state
     if (widget.message.uploadStatus == 'uploading') {
       return Row(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          IconButton(
-            icon: Icon(
-              Icons.schedule,
-              color: color.withOpacity(0.7),
-              size: 30,
-            ),
-            onPressed: null,
-          ),
-          Expanded(
-            child: _buildUploadingWidget(color), // Just the animation
-          ),
-          Padding(
-            padding: const EdgeInsets.only(left: 8, right: 4),
-            child: Text(
-              _formatDuration(Duration(seconds: (widget.message.audioDuration ?? 0).toInt())),
-              style: theme.textTheme.labelMedium?.copyWith(
-                color: color.withOpacity(0.5),
-                fontWeight: FontWeight.w600,
-              ),
+          Icon(Icons.cloud_upload_outlined, color: color.withOpacity(0.7), size: 24),
+          const SizedBox(width: 12),
+          Expanded(child: _buildUploadingWidget(color)),
+          const SizedBox(width: 12),
+          Text(
+            _formatDuration(Duration(seconds: (widget.message.audioDuration ?? 0).toInt())),
+            style: theme.textTheme.labelMedium?.copyWith(
+              color: color.withOpacity(0.6),
+              fontWeight: FontWeight.w600,
             ),
           ),
+          const SizedBox(width: 24), // Reserve space for timestamp/status overlay
         ],
       );
     }
-    // ✨ --- END OF FIX --- ✨
     
+    // Error state
     if (widget.message.uploadStatus == 'failed' || _hasError) {
-      return Row(mainAxisSize: MainAxisSize.min, children: [
-        Icon(Icons.error_outline, color: theme.colorScheme.error),
-        const SizedBox(width: 12),
-        Text("Upload failed", style: TextStyle(color: theme.colorScheme.error))
-      ]);
+      return Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(Icons.error_outline, color: theme.colorScheme.error, size: 24),
+          const SizedBox(width: 8),
+          Text("Failed to load", style: TextStyle(color: theme.colorScheme.error, fontSize: 13))
+        ],
+      );
     }
 
-    // Main Player UI
+    // Calculate progress
+    final progress = _totalDuration.inMilliseconds > 0
+        ? (_currentPosition.inMilliseconds / _totalDuration.inMilliseconds).clamp(0.0, 1.0)
+        : 0.0;
+
+    // Main player UI
     return Row(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.center,
       children: [
-        IconButton(
-          icon: _isLoading
-              ? Icon(Icons.downloading_rounded, color: color, size: 30)
-              : AnimatedIcon(
-                  icon: AnimatedIcons.play_pause,
-                  progress: _playPauseController,
-                  color: color,
-                  size: 30,
-                ),
-          onPressed: _isLoading ? null : _togglePlayPause,
-        ),
-        
-        Expanded(
-          child: Stack(
-            alignment: Alignment.centerRight,
-            children: [
-              _waveformLoaded
-                ? AudioFileWaveforms(
-                    size: const Size(double.infinity, 40),
-                    playerController: _waveformController,
-                    waveformType: WaveformType.long,
-                    enableSeekGesture: true,
-                    padding: const EdgeInsets.only(right: 50), 
-                    margin: EdgeInsets.zero,
-                    playerWaveStyle: PlayerWaveStyle(
-                      fixedWaveColor: color.withOpacity(0.4),
-                      liveWaveColor: color,
-                      showSeekLine: false,
-                    ),
-                  )
-                : Container(
-                    height: 40,
-                    alignment: Alignment.centerLeft,
-                    padding: const EdgeInsets.only(right: 50),
-                    child: Container(
-                      height: 2.0,
-                      color: color.withOpacity(0.4),
-                    ),
+        // Play/Pause button
+        GestureDetector(
+          onTap: _togglePlayPause,
+          child: Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              color: color.withOpacity(0.15),
+              shape: BoxShape.circle,
+            ),
+            child: _isLoading
+                ? _buildLoadingAnimation(color)
+                : Icon(
+                    _isPlaying ? Icons.pause : Icons.play_arrow,
+                    color: color,
+                    size: 24,
                   ),
-              
-              Padding(
-                padding: const EdgeInsets.only(right: 4.0), 
-                child: Text(
-                  _formatDuration(
-                    _isPlaying
-                      ? _currentPosition 
-                      : (_totalDuration.inSeconds == 0 ? Duration(seconds: (widget.message.audioDuration ?? 0).toInt()) : _totalDuration)
-                  ),
-                  style: theme.textTheme.labelSmall?.copyWith(
-                    color: color.withOpacity(0.8),
-                    fontWeight: FontWeight.w600,
-                    fontFeatures: const [FontFeature.tabularFigures()],
-                  ),
-                ),
-              ),
-            ],
           ),
         ),
+        
+        const SizedBox(width: 12),
+        
+        // Waveform visualization
+        Expanded(
+          child: Center(
+            child: CustomPaint(
+              size: const Size(double.infinity, 32),
+              painter: _WaveformPainter(
+                progress: progress,
+                color: color,
+                isPlaying: _isPlaying,
+              ),
+            ),
+          ),
+        ),
+        
+        const SizedBox(width: 12),
+        
+        // Duration
+        Text(
+          _formatDuration(
+            _isPlaying
+              ? _currentPosition 
+              : (_totalDuration.inSeconds == 0 
+                  ? Duration(seconds: (widget.message.audioDuration ?? 0).toInt()) 
+                  : _totalDuration)
+          ),
+          style: theme.textTheme.labelSmall?.copyWith(
+            color: color.withOpacity(0.8),
+            fontWeight: FontWeight.w600,
+            fontSize: 12,
+            fontFeatures: const [FontFeature.tabularFigures()],
+          ),
+        ),
+
+        // ✨ Resend Button (Only if Expired but Cached)
+        if (isExpiredButCached) ...[
+          const SizedBox(width: 12),
+          Tooltip(
+            message: "Restore to Server",
+            child: InkWell(
+              onTap: _handleResend,
+              borderRadius: BorderRadius.circular(20),
+              child: Padding(
+                padding: const EdgeInsets.all(4.0),
+                child: _isResending
+                    ? SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: color))
+                    : Icon(Icons.restore_page_outlined, color: color.withOpacity(0.9), size: 20),
+              ),
+            ),
+          ),
+        ],
       ],
     );
+  }
+}
+
+// Keep your existing _WaveformPainter class...
+class _WaveformPainter extends CustomPainter {
+  final double progress;
+  final Color color;
+  final bool isPlaying;
+  
+  _WaveformPainter({
+    required this.progress,
+    required this.color,
+    required this.isPlaying,
+  });
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    // Generate consistent bar heights
+    final barCount = 40;
+    final barWidth = 3.0;
+    final spacing = (size.width - (barCount * barWidth)) / (barCount - 1);
+    final random = math.Random(42); // Fixed seed for consistent pattern
+    
+    for (int i = 0; i < barCount; i++) {
+      final x = i * (barWidth + spacing);
+      final heightFactor = 0.3 + (random.nextDouble() * 0.7); // 30-100% height
+      final barHeight = size.height * heightFactor;
+      final y = (size.height - barHeight) / 2;
+      
+      // Determine if this bar is in the "played" portion
+      final barProgress = (x + barWidth / 2) / size.width;
+      final isPlayed = barProgress <= progress;
+      
+      final paint = Paint()
+        ..color = isPlayed ? color : color.withOpacity(0.3)
+        ..strokeWidth = barWidth
+        ..strokeCap = StrokeCap.round;
+      
+      canvas.drawLine(
+        Offset(x + barWidth / 2, y),
+        Offset(x + barWidth / 2, y + barHeight),
+        paint,
+      );
+    }
+  }
+  
+  @override
+  bool shouldRepaint(_WaveformPainter oldDelegate) {
+    return oldDelegate.progress != progress || 
+           oldDelegate.isPlaying != isPlaying;
   }
 }

@@ -107,11 +107,32 @@ class _SecretNoteIconState extends State<SecretNoteIcon>
                   ),
                 ],
               ),
-              child: Icon(
-                Icons.card_giftcard_rounded, // A "gift" icon
-                size: 30,
-                color: Theme.of(context).colorScheme.onPrimaryContainer,
-              ),
+                child: Stack(
+                  alignment: Alignment.center,
+                  children: [
+                    Icon(
+                      Icons.card_giftcard_rounded, // A "gift" icon
+                      size: 30,
+                      color: Theme.of(context).colorScheme.onPrimaryContainer,
+                    ),
+                    Positioned(
+                      bottom: 0,
+                      right: 0,
+                      child: Container(
+                         padding: const EdgeInsets.all(1),
+                         decoration: BoxDecoration(
+                           color: Theme.of(context).colorScheme.surface,
+                           shape: BoxShape.circle,
+                         ),
+                         child: Icon(
+                          Icons.lock,
+                          size: 10,
+                          color: Theme.of(context).colorScheme.primary,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
             ),
           ),
         ),

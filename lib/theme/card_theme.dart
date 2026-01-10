@@ -57,4 +57,17 @@ class AppCardTheme {
   static final CardThemeData oceanDarkCardTheme = darkCardTheme.copyWith(
     color: AppColors.oceanDarkSurface,
   );
+
+  // ✨ --- NEW THEMES ---
+  static final CardThemeData midnightCardTheme = darkCardTheme.copyWith(
+    color: AppColors.midnightSurface,
+  );
+
+  static final CardThemeData eclipseCardTheme = darkCardTheme.copyWith(
+    color: AppColors.eclipseSurface,
+  );
+
+  static final CardThemeData auroraCardTheme = darkCardTheme.copyWith(
+    color: AppColors.auroraSurface,
+  );
 }

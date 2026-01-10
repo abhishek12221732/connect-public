@@ -6,6 +6,7 @@ import 'package:feelings/features/media/repository/media_repository.dart';
 import 'package:feelings/features/media/services/local_storage_helper.dart';
 import './dynamic_actions_provider.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:feelings/services/encryption_service.dart';
 
 class MediaProvider extends ChangeNotifier {
   final DynamicActionsProvider _dynamicActionsProvider;
@@ -64,14 +65,42 @@ class MediaProvider extends ChangeNotifier {
     if (!_hasInitialized) {
       _memoriesSubscription?.cancel();
       _memoriesSubscription = _mediaRepository.fetchMedia(coupleId).listen(
-        (memories) {
+        (memories) async {
           // ✨ --- [GUARD 1: ON-DATA] --- ✨
           if (FirebaseAuth.instance.currentUser == null) {
             debugPrint("[MediaProvider] Event received, but user is logged out. Ignoring.");
             return;
           }
 
-          _memoriesCache = memories;
+         List<Map<String, dynamic>> decryptedMemories = [];
+
+          for (var item in memories) {
+             var data = Map<String, dynamic>.from(item);
+             
+             if (data['encryptionVersion'] == 1) {
+                // 1. Decrypt Image ID
+                if (data['ciphertextId'] != null) {
+                   try {
+                     data['imageId'] = await EncryptionService.instance.decryptText(
+                        data['ciphertextId'], data['nonceId'], data['macId']
+                     );
+                   } catch (_) { data['imageId'] = null; }
+                }
+                
+                // 2. Decrypt Text (Caption)
+                if (data['ciphertextText'] != null) {
+                   try {
+                     data['text'] = await EncryptionService.instance.decryptText(
+                        data['ciphertextText'], data['nonceText'], data['macText']
+                     );
+                   } catch (_) { data['text'] = "🔒 Error"; }
+                }
+             }
+             decryptedMemories.add(data);
+          }
+
+          // Update cache with decrypted data
+          _memoriesCache = decryptedMemories; 
           _hasInitialized = true;
           notifyListeners();
         },
@@ -108,7 +137,7 @@ class MediaProvider extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> uploadMedia(String coupleId, File imageFile, String text, String userId) async {
+  Future<void> uploadMedia(String coupleId, File imageFile, String text, String userId, {bool isEncryptionEnabled = false}) async {
     final tempId = 'optimistic_${DateTime.now().millisecondsSinceEpoch}';
     optimisticMemory = {
       'docId': tempId,
@@ -150,12 +179,22 @@ class MediaProvider extends ChangeNotifier {
       }
 
       _updateUploadProgress(0.8);
-      await _mediaRepository.saveMedia(coupleId, driveImageId, text, userId);
+      await _mediaRepository.saveMedia(coupleId, driveImageId, text, userId, isEncryptionEnabled: isEncryptionEnabled);
       _updateUploadProgress(1.0);
 
       await Future.delayed(const Duration(milliseconds: 500));
       _dynamicActionsProvider.recordMemoryUploaded();
     } catch (e) {
+
+      if (e is GoogleAuthCancelledException || e.toString().contains("GoogleAuthCancelledException")) {
+        print("[MediaProvider] Upload cancelled. Resetting state.");
+        _isUploading = false;
+        _uploadError = null; // Important: Don't set an error string
+        optimisticMemory = null; // Remove the temporary item
+        notifyListeners();
+        return; // Stop here! Do not rethrow.
+      }
+      
       _uploadError = e.toString();
       _isUploading = false;
       notifyListeners();
@@ -180,9 +219,9 @@ class MediaProvider extends ChangeNotifier {
     }
   }
 
-  Future<void> retryUpload(String coupleId, File imageFile, String text, String userId) async {
+  Future<void> retryUpload(String coupleId, File imageFile, String text, String userId, {bool isEncryptionEnabled = false}) async {
     _uploadError = null;
-    await uploadMedia(coupleId, imageFile, text, userId);
+    await uploadMedia(coupleId, imageFile, text, userId, isEncryptionEnabled: isEncryptionEnabled);
   }
 
   void clearUploadError() {

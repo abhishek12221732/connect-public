@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'app_colors.dart';
+import 'mood_theme.dart';
 import 'app_text_styles.dart';
 import 'button_theme.dart';
 import 'text_field_theme.dart';
@@ -8,9 +9,12 @@ import 'card_theme.dart';
 enum AppThemeType {
   defaultLight,
   sunset,
+  midnight,
+  eclipse,
+  aurora,
+  amethyst,
   oceanic,
   pastel,
-  amethyst,
   mint,
   oceanDark,
 }
@@ -46,6 +50,7 @@ class AppTheme {
       iconTheme: const IconThemeData(color: AppColors.textPrimary),
       titleTextStyle: AppTextStyles.headline6,
     ),
+    extensions: const [MoodTheme.light],
     useMaterial3: true,
   );
 
@@ -76,6 +81,7 @@ class AppTheme {
       iconTheme: const IconThemeData(color: AppColors.darkTextPrimary),
       titleTextStyle: AppTextStyles.darkHeadline6,
     ),
+    extensions: const [MoodTheme.dark],
     useMaterial3: true,
   );
 
@@ -95,10 +101,12 @@ class AppTheme {
     required TextButtonThemeData textButtonTheme,
     required CardThemeData cardTheme,
     required InputDecorationTheme inputDecorationTheme,
+    required MoodTheme moodTheme,
   }) {
     return baseTheme.copyWith(
       primaryColor: primary,
       scaffoldBackgroundColor: background,
+      extensions: [moodTheme],
       colorScheme: baseTheme.colorScheme.copyWith(
         primary: primary,
         secondary: secondary,
@@ -144,6 +152,7 @@ class AppTheme {
     textButtonTheme: AppButtonTheme.sunsetTextButtonTheme,
     cardTheme: AppCardTheme.sunsetCardTheme,
     inputDecorationTheme: AppTextFieldTheme.sunsetInputDecorationTheme,
+    moodTheme: MoodTheme.sunset,
   );
 
   static final oceanicTheme = _createTheme(
@@ -161,6 +170,7 @@ class AppTheme {
     textButtonTheme: AppButtonTheme.oceanicTextButtonTheme,
     cardTheme: AppCardTheme.oceanicCardTheme,
     inputDecorationTheme: AppTextFieldTheme.oceanicInputDecorationTheme,
+    moodTheme: MoodTheme.oceanic,
   );
   
   static final pastelTheme = _createTheme(
@@ -178,6 +188,7 @@ class AppTheme {
     textButtonTheme: AppButtonTheme.pastelTextButtonTheme,
     cardTheme: AppCardTheme.pastelCardTheme,
     inputDecorationTheme: AppTextFieldTheme.pastelInputDecorationTheme,
+    moodTheme: MoodTheme.pastel,
   );
   
   static final amethystTheme = _createTheme(
@@ -195,6 +206,7 @@ class AppTheme {
     textButtonTheme: AppButtonTheme.amethystTextButtonTheme,
     cardTheme: AppCardTheme.amethystCardTheme,
     inputDecorationTheme: AppTextFieldTheme.amethystInputDecorationTheme,
+    moodTheme: MoodTheme.amethyst,
   );
 
   static final mintTheme = _createTheme(
@@ -212,6 +224,7 @@ class AppTheme {
     textButtonTheme: AppButtonTheme.mintTextButtonTheme,
     cardTheme: AppCardTheme.mintCardTheme,
     inputDecorationTheme: AppTextFieldTheme.mintInputDecorationTheme,
+    moodTheme: MoodTheme.mint,
   );
 
   static final oceanDarkTheme = _createTheme(
@@ -229,15 +242,76 @@ class AppTheme {
     textButtonTheme: AppButtonTheme.oceanDarkTextButtonTheme,
     cardTheme: AppCardTheme.oceanDarkCardTheme,
     inputDecorationTheme: AppTextFieldTheme.oceanDarkInputDecorationTheme,
+    moodTheme: MoodTheme.oceanDark,
+  );
+
+  // ✨ --- NEW: Midnight (OLED) Theme ---
+  static final midnightTheme = _createTheme(
+    baseTheme: darkTheme,
+    primary: AppColors.midnightPrimary,
+    secondary: AppColors.midnightSecondary,
+    background: AppColors.midnightBackground,
+    surface: AppColors.midnightSurface,
+    onPrimary: AppColors.midnightOnPrimary,
+    onSurface: AppColors.midnightTextPrimary,
+    baseTextTheme: AppTextStyles.darkTextTheme,
+    baseHeadline6: AppTextStyles.darkHeadline6,
+    elevatedButtonTheme: AppButtonTheme.midnightElevatedButtonTheme,
+    outlinedButtonTheme: AppButtonTheme.midnightOutlinedButtonTheme,
+    textButtonTheme: AppButtonTheme.midnightTextButtonTheme,
+    cardTheme: AppCardTheme.midnightCardTheme,
+    inputDecorationTheme: AppTextFieldTheme.midnightInputDecorationTheme,
+    moodTheme: MoodTheme.midnight,
+  );
+
+  // ✨ --- NEW: Eclipse (Luxury) Theme ---
+  static final eclipseTheme = _createTheme(
+    baseTheme: darkTheme,
+    primary: AppColors.eclipsePrimary,
+    secondary: AppColors.eclipseSecondary,
+    background: AppColors.eclipseBackground,
+    surface: AppColors.eclipseSurface,
+    onPrimary: AppColors.eclipseOnPrimary,
+    onSurface: AppColors.eclipseTextPrimary,
+    baseTextTheme: AppTextStyles.darkTextTheme,
+    baseHeadline6: AppTextStyles.darkHeadline6,
+    elevatedButtonTheme: AppButtonTheme.eclipseElevatedButtonTheme,
+    outlinedButtonTheme: AppButtonTheme.eclipseOutlinedButtonTheme,
+    textButtonTheme: AppButtonTheme.eclipseTextButtonTheme,
+    cardTheme: AppCardTheme.eclipseCardTheme,
+    inputDecorationTheme: AppTextFieldTheme.eclipseInputDecorationTheme,
+    moodTheme: MoodTheme.eclipse,
+  );
+
+  // ✨ --- NEW: Aurora (Nature) Theme ---
+  static final auroraTheme = _createTheme(
+    baseTheme: darkTheme,
+    primary: AppColors.auroraPrimary,
+    secondary: AppColors.auroraSecondary,
+    background: AppColors.auroraBackground,
+    surface: AppColors.auroraSurface,
+    onPrimary: AppColors.auroraOnPrimary,
+    onSurface: AppColors.auroraTextPrimary,
+    baseTextTheme: AppTextStyles.darkTextTheme,
+    baseHeadline6: AppTextStyles.darkHeadline6,
+    elevatedButtonTheme: AppButtonTheme.auroraElevatedButtonTheme,
+    outlinedButtonTheme: AppButtonTheme.auroraOutlinedButtonTheme,
+    textButtonTheme: AppButtonTheme.auroraTextButtonTheme,
+    cardTheme: AppCardTheme.auroraCardTheme,
+    inputDecorationTheme: AppTextFieldTheme.auroraInputDecorationTheme,
+    moodTheme: MoodTheme.aurora,
   );
 
   // The final map of all available themes
   static final Map<AppThemeType, ThemeData> themes = {
     AppThemeType.defaultLight: defaultTheme,
     AppThemeType.sunset: sunsetTheme,
+    AppThemeType.midnight: midnightTheme,
+    AppThemeType.eclipse: eclipseTheme,
+    AppThemeType.aurora: auroraTheme,
+    AppThemeType.amethyst: amethystTheme,
     AppThemeType.oceanic: oceanicTheme,
     AppThemeType.pastel: pastelTheme,
-    AppThemeType.amethyst: amethystTheme,
     AppThemeType.mint: mintTheme,
     AppThemeType.oceanDark: oceanDarkTheme,
   };

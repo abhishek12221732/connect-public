@@ -18,6 +18,7 @@ import 'dart:convert';
 import 'package:cloud_functions/cloud_functions.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:feelings/features/auth/services/auth_service.dart';
+import 'package:feelings/services/encryption_service.dart';
 
 
 class UserProvider with ChangeNotifier{
@@ -29,6 +30,11 @@ class UserProvider with ChangeNotifier{
   UserModel? get currentUser => _currentUser;
   bool _isLoading = true;
   String? _coupleId;
+  
+  // ✨ Error Tracking
+  String? _error;
+  bool get hasError => _error != null;
+
   String? _partnerLocalProfileImagePath;
 String? get partnerLocalProfileImagePath => _partnerLocalProfileImagePath;
 Uint8List? _webProfileImageBytes;
@@ -63,10 +69,18 @@ Uint8List? _webProfileImageBytes;
 
   bool get isLoggedIn => _currentUser != null;
 
+  // ✨ Encryption Helpers
+  String get encryptionStatus => _userData?['encryptionStatus'] ?? 'pending';
+  bool get isEncryptionEnforced => encryptionStatus == 'enabled';
+
+
 // lib/features/auth/services/user_provider.dart
 
   Future<void> fetchUserData() async {
     try {
+      // ✨ RESET ERROR STATE
+      _error = null;
+
       // ✨ SET LOADING TRUE AT THE VERY START
       if (!_isLoading) {
         _isLoading = true;
@@ -80,14 +94,72 @@ Uint8List? _webProfileImageBytes;
         return; 
       }
 
-      // Step 1: Try to get user data
-      _userData = await _userRepository.getUserData(user.uid);
+      // --- ⚡ OPTIMIZATION: TRY CACHE FIRST ---
+      try {
+        _userData = await _userRepository.getUserData(user.uid, source: Source.cache);
+        
+        if (_userData != null) {
+          debugPrint("⚡ [UserProvider] Loaded User Data from CACHE.");
+          // We have cached data! Initialize UI immediately.
+           try {
+            _currentUser = UserModel.fromMap(_userData!);
+            
+            // Setup IDs
+             NotificationService.setCurrentUserId(user.uid);
+             try {
+               FirebaseCrashlytics.instance.setUserIdentifier(user.uid);
+             } catch (_) {}
+             _coupleId = _userData!['coupleId'] as String?;
+
+             // Load Keys if possible (also cached)
+             if (_coupleId != null) {
+                // Determine if we have local keys
+                // We don't await this if we want INSTANT UI, but for keys we need them for chat.
+                // It's fast usually.
+                await EncryptionService.instance.loadMasterKey(_coupleId!);
+             }
+             
+             // 🚀 SHOW UI NOW
+             _isLoading = false;
+             notifyListeners(); 
+             
+             // Queue secondary data fetch (partner images etc)
+             _fetchSecondaryDataInBackground(user.uid);
+
+          } catch (e) {
+             debugPrint("⚠️ [UserProvider] Cache data was corrupt or invalid: $e");
+             // Fallback to server will happen below
+          }
+        }
+      } catch (e) {
+        debugPrint("⚠️ [UserProvider] Cache miss or error: $e");
+        // No cache available, just proceed to network fetch
+      }
+
+
+      // --- 🌐 STEP 2: FETCH FRESH SERVER DATA ---
+      // This is "Stale-While-Revalidate". Even if cache loaded, we check server.
+      debugPrint("🌐 [UserProvider] Fetching FRESH User Data from Server...");
       
-      // ... (your existing race condition fix)
-      final isEmailUser = user.providerData.any((p) => p.providerId == 'password');
-      if (_userData == null && isEmailUser) {
-        await Future.delayed(const Duration(milliseconds: 1500));
-        _userData = await _userRepository.getUserData(user.uid);
+      try {
+        final serverUserData = await _userRepository.getUserData(user.uid, source: Source.server);
+        
+        // ... (your existing race condition fix for new signups)
+        final isEmailUser = user.providerData.any((p) => p.providerId == 'password');
+        if (serverUserData == null && isEmailUser && _userData == null) {
+           // Only retry if we have NOTHING (no cache, no server)
+          await Future.delayed(const Duration(milliseconds: 1500));
+          _userData = await _userRepository.getUserData(user.uid);
+        } else if (serverUserData != null) {
+          _userData = serverUserData;
+        }
+      } catch (e) {
+         debugPrint("⚠️ [UserProvider] Network fetch failed: $e");
+         if (_userData == null) {
+            // If we have NO data (no cache, and network failed), this is a critical error.
+            rethrow; 
+         }
+         // If we have cache, we just silently fail the refresh.
       }
       
       if (_userData == null) {
@@ -96,27 +168,24 @@ Uint8List? _webProfileImageBytes;
         return; // UserDataLoader will see null and navigate to /register
       }
       
-      // --- USER EXISTS, PROCEED ---
+      // --- UPDATE STATE WITH FRESH DATA ---
 
-      // ✨ --- THIS IS THE FIX --- ✨
-      // Step 2: Create the UserModel from the fetched data and set it.
-      // This ensures `userProvider.currentUser` is not null in UserDataLoader.
       try {
         _currentUser = UserModel.fromMap(_userData!);
       } catch (e, stack) {
         try {
           FirebaseCrashlytics.instance.recordError(e, stack, reason: 'UserProvider.fetchUserData failed to parse UserModel fromMap');
         } catch (_) {}
-        // If parsing fails, data is corrupt. Treat as logged out.
+        // If parsing fails for SERVER data, it's a critical error if we don't have cache.
+        // If we showed cache, we might want to keep showing it? 
+        // For now, fail safe.
         _userData = null;
         _currentUser = null;
         _isLoading = false;
         notifyListeners();
-        await _auth.signOut(); // Sign out to be safe
+        await _auth.signOut(); 
         return;
       }
-      // ✨ --- END OF FIX --- ✨
-
 
       NotificationService.setCurrentUserId(user.uid);
       try {
@@ -124,21 +193,33 @@ Uint8List? _webProfileImageBytes;
       } catch (_) {}
 
       _coupleId = _userData!['coupleId'] as String?;
-      _isLoading = false;
-      notifyListeners(); // ✨ NOTIFY UI - WE HAVE DATA!
+      
+      // ✨ AUTO-LOAD MASTER KEY ON LOGIN (Retry with fresh data)
+      if (_coupleId != null) {
+         try {
+            await EncryptionService.instance.loadMasterKey(_coupleId!);
+         } catch (e) {
+            debugPrint("⚠️ [UserProvider] Failed to auto-load key: $e");
+         }
+      }
 
-      // Step 4: Fetch all partner/image data in the background.
+      _isLoading = false;
+      notifyListeners(); // ✨ NOTIFY UI - FRESH DATA!
+
+      // Step 4: Fetch all partner/image data in the background (Refresh those too)
       _fetchSecondaryDataInBackground(user.uid);
 
     } catch (e) {
-      // ... (your existing error handling)
       debugPrint('Error fetching user data: $e');
-      _isLoading = false;
-      notifyListeners();
-      rethrow;
+      if (_userData == null) {
+         // ✨ SET ERROR STATE
+          _error = "Failed to load user data";
+          _isLoading = false;
+          notifyListeners();
+          // rethrow; // Don't rethrow, let the UI handle _error
+      }
     }
   }
-
 
   Future<void> _fetchSecondaryDataInBackground(String userId) async {
     try {
@@ -543,8 +624,18 @@ ImageProvider getPartnerProfileImageSync() {
           await getCoupleId();
           
           // Set current user ID in notification service for FCM token management
+          // Set current user ID in notification service for FCM token management
           NotificationService.setCurrentUserId(userId);
           
+          if (_coupleId != null) {
+              debugPrint("🔐 [UserProvider] Auth restore success. Auto-loading Master Key for $_coupleId...");
+              try {
+                  await EncryptionService.instance.loadMasterKey(_coupleId!);
+              } catch (e) {
+                  debugPrint("⚠️ [UserProvider] Failed to auto-load key on restore: $e");
+              }
+          }
+
           notifyListeners();
         } else {
           // User data not found in Firestore, clear stored data
@@ -596,6 +687,15 @@ ImageProvider getPartnerProfileImageSync() {
           ...?_userData,
           ...updatedFields
         }; // Optimistically update local state
+        
+        // ✨ FIX: Also update the UserModel object so getters like currentUser.encryptionStatus return new values
+        if (_userData != null) {
+          try {
+            _currentUser = UserModel.fromMap(_userData!);
+          } catch (e) {
+             debugPrint("Error updating UserModel: $e");
+          }
+        }
         notifyListeners();
       }
     } catch (e) {
@@ -603,26 +703,43 @@ ImageProvider getPartnerProfileImageSync() {
     }
   }
 
-  /// Update user mood
+  /// Update user mood - OPTIMISTIC UPDATE
   Future<void> updateUserMood(String mood) async {
     try {
       User? user = _auth.currentUser;
 
       if (user != null) {
-        await _userRepository.updateUserMood(
-          userId: user.uid,
-          mood: mood,
-        );
+        // 1. Capture previous state for rollback
+        final previousMood = _userData?['mood'];
+        final previousUpdate = _userData?['moodLastUpdated'];
 
+        // 2. Optimistic Update
         _userData = {
           ...?_userData,
           'mood': mood,
           'moodLastUpdated': DateTime.now(),
         };
-        notifyListeners();
+        notifyListeners(); // ✨ UI updates instantly
+
+        // 3. Perform Network Request
+        try {
+          await _userRepository.updateUserMood(
+            userId: user.uid,
+            mood: mood,
+          );
+        } catch (e) {
+          // 4. Rollback on failure
+          _userData = {
+            ...?_userData,
+            'mood': previousMood,
+            'moodLastUpdated': previousUpdate,
+          };
+          notifyListeners();
+          rethrow; // Let the caller know (though rarely handled in UI for fire-and-forget)
+        }
       }
     } catch (e) {
-      // print('Error updating mood: $e');
+      debugPrint('Error updating mood: $e');
     }
   }
 
@@ -645,12 +762,15 @@ ImageProvider getPartnerProfileImageSync() {
       await _userRepository.deleteUserAccount();
 
       // ✨ --- ADD THIS LINE --- ✨
-      // STEP 3: Manually sign out the client.
+      // STEP 3: Hard reset encryption keys (Wipe Identity)
+      await EncryptionService.instance.hardReset();
+
+      // STEP 4: Manually sign out the client.
       // This is the missing piece that will notify the AuthWrapper.
       // await _auth.signOut();
       await _auth.signOut();
       
-      // STEP 4: Clear all local provider data
+      // STEP 5: Clear all local provider data
       // clear is done by auth wrapper 
       // await clear();
 
@@ -672,6 +792,21 @@ ImageProvider getPartnerProfileImageSync() {
     }
   }
 
+  /// Sign out the current user and clear local data
+  Future<void> signOut() async {
+    try {
+      debugPrint('[UserProvider] Signing out...');
+      await _auth.signOut();
+      debugPrint('[UserProvider] Firebase Auth Signout successful.');
+      await clear();
+      debugPrint('[UserProvider] Local data cleared.');
+    } catch (e) {
+      debugPrint('[UserProvider] Error during sign out: $e');
+      // Ensure we clear even if auth signout fails (e.g. network issue)
+      await clear(); 
+    }
+  }
+
   /// Clear user data (e.g., during logout)
 // In user_provider.dart
 
@@ -680,6 +815,9 @@ Future<void> clear() async {
     // Stop any active listeners
     stopListeningToPartner();
     debugPrint('[7b] UserProvider: Starting clear() method.');
+    
+    // ✨ Clear Encryption Keys (Session only, preserve identity)
+    EncryptionService.instance.clearSessionKeys();
     
     // ✨ --- THIS IS THE FIX --- ✨
     // In test mode, we skip all I/O (SharedPreferences/File) 

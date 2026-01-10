@@ -59,6 +59,12 @@ class _SharedJournalQuillEditorState extends State<SharedJournalQuillEditor> {
     if (_controllers.containsKey(idx) && _controllers[idx]!.text != _segments[idx]['text']) {
         setState(() {
           _segments[idx]['text'] = _controllers[idx]!.text;
+          // ✨ FIX: If user edits, we must clear any old crypto data (e.g. from failed decryption)
+          // to ensure this new text is treated as the source of truth.
+          _segments[idx].remove('ciphertext');
+          _segments[idx].remove('nonce');
+          _segments[idx].remove('mac');
+          _segments[idx].remove('encryptionVersion');
         });
         widget.onChanged(_segments);
     }

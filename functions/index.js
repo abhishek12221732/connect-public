@@ -14,18 +14,28 @@ const CLOUDINARY_CLOUD_NAME = defineString("CLOUDINARY_CLOUD_NAME");
 const CLOUDINARY_API_KEY = defineString("CLOUDINARY_API_KEY");
 const CLOUDINARY_API_SECRET = defineString("CLOUDINARY_API_SECRET");
 
-cloudinary.config({
-  cloud_name: CLOUDINARY_CLOUD_NAME.value(),
-  api_key: CLOUDINARY_API_KEY.value(),
-  api_secret: CLOUDINARY_API_SECRET.value(),
-  secure: true,
-});
+// cloudinary.config({
+//   cloud_name: CLOUDINARY_CLOUD_NAME.value(),
+//   api_key: CLOUDINARY_API_KEY.value(),
+//   api_secret: CLOUDINARY_API_SECRET.value(),
+//   secure: true,
+// });
+
+const getCloudinaryConfig = () => {
+  return {
+    cloud_name: CLOUDINARY_CLOUD_NAME.value(),
+    api_key: CLOUDINARY_API_KEY.value(),
+    api_secret: CLOUDINARY_API_SECRET.value(),
+    secure: true,
+  };
+};
 
 // ✨ --- NEW FUNCTION: Generates a signature for secure Cloudinary uploads --- ✨
 exports.generateCloudinarySignature = onCall(async (request) => {
   if (!request.auth) {
     throw new Error("User not authenticated.");
   }
+  cloudinary.config(getCloudinaryConfig());
 
   const publicId = request.data.publicId;
   const folder = request.data.folder; // Get the folder from the request
@@ -90,6 +100,7 @@ exports.deleteCloudinaryImage = onCall({
     if (!request.auth) {
       throw new Error("User not authenticated.");
     }
+    cloudinary.config(getCloudinaryConfig());
 
     const publicId = request.data.publicId;
     if (!publicId || typeof publicId !== "string") {
@@ -216,7 +227,7 @@ exports.deleteUserAccount = onCall({
 
 
 exports.checkRhmScores = onSchedule({
-  schedule: "every day 09:00",
+  schedule: "0 9 * * 1",
   timeZone: "Asia/Kolkata", // ✨ Changed from America/New_York
 }, async (event) => {
   console.log("Running daily RHM score check...");
@@ -318,3 +329,78 @@ async function sendLowScoreNotification(userId, score) {
     // You might want to remove invalid tokens here if they are unregistered
   }
 }
+
+// 🗑️ CLEANUP: Delete expired voice messages (older than 30 days)
+exports.cleanupVoiceMessages = onSchedule({
+  schedule: "0 0 * * 0", // Run every Sunday at midnight
+  timeZone: "Asia/Kolkata",
+}, async (event) => {
+  console.log("Running daily Voice Message cleanup...");
+
+  const bucket = admin.storage().bucket();
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 30); // 30 Day TTL
+
+  try {
+    // Query all voice messages older than 30 days
+    const snapshot = await db.collectionGroup("messages")
+      .where("messageType", "==", "voice")
+      .where("timestamp", "<", admin.firestore.Timestamp.fromDate(cutoff))
+      .get();
+
+    if (snapshot.empty) {
+      console.log("No expired voice messages found.");
+      return;
+    }
+
+    console.log(`Found ${snapshot.size} expired voice messages.`);
+
+    const batch = db.batch();
+    let batchCount = 0;
+
+    for (const doc of snapshot.docs) {
+      const data = doc.data();
+      const audioUrl = data.audioUrl;
+
+      // 1. Delete from Storage
+      if (audioUrl) {
+         try {
+           const matches = audioUrl.match(/\/o\/(.*?)\?alt=/);
+           if (matches && matches[1]) {
+             const filePath = decodeURIComponent(matches[1]);
+             await bucket.file(filePath).delete();
+             console.log(`Deleted file: ${filePath}`);
+           }
+         } catch (e) {
+           console.warn(`Failed to delete file for msg ${doc.id}: ${e.message}`);
+         }
+      }
+
+      // 2. Update Document (Mark as expired, remove URL)
+      // ✨ MODIFIED: We do not wipe the content or encryption data.
+      // We only remove the URL so the client knows not to try downloading it.
+      // This allows users who HAVE the file locally (e.g. the partner) to still play/forward it.
+      batch.update(doc.ref, {
+        audioUrl: null, // Indicates file is gone from server
+        storageStatus: "expired", // Flag for UI
+        // Do NOT wipe 'content', 'ciphertext', 'audioGlobalOtk', etc. 
+        // effectively preserving the metadata for local playback.
+      });
+
+      batchCount++;
+      if (batchCount >= 400) {
+        await batch.commit();
+        batchCount = 0;
+      }
+    }
+
+    if (batchCount > 0) {
+      await batch.commit();
+    }
+    
+    console.log("Voice message cleanup complete.");
+
+  } catch (error) {
+    console.error("Error cleaning up voice messages:", error);
+  }
+});

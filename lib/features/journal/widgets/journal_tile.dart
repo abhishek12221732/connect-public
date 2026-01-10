@@ -1,14 +1,20 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:feelings/providers/journal_provider.dart';
+import 'package:feelings/features/encryption/widgets/encryption_status_bubble.dart';
 import '../../../providers/user_provider.dart';
+import 'package:feelings/services/encryption_service.dart'; // Import EncryptionService
 
 class JournalTile extends StatefulWidget {
   final String journalId;
   final String title;
-  final String? content;
+  final String? content; // Restore content
+  final String? ciphertext; 
+  final String? nonce; 
+  final String? mac;
   final dynamic timestamp;
   final List<dynamic>? segments;
+  final int? encryptionVersion; 
   final VoidCallback onTap;
   final bool isShared;
 
@@ -16,11 +22,15 @@ class JournalTile extends StatefulWidget {
     super.key,
     required this.journalId,
     required this.title,
-    this.content,
+    this.content, // Restore content
+    this.ciphertext,
     required this.timestamp,
     this.segments,
+    this.encryptionVersion,
     required this.onTap,
     required this.isShared,
+    this.nonce,
+    this.mac,
   });
 
   @override
@@ -32,6 +42,9 @@ class _JournalTileState extends State<JournalTile>
   late AnimationController _animationController;
   late Animation<double> _scaleAnimation;
   bool _isPressed = false;
+  
+  String _displayContent = "";
+  bool _isDecrypting = true;
 
   @override
   void initState() {
@@ -47,6 +60,94 @@ class _JournalTileState extends State<JournalTile>
       parent: _animationController,
       curve: Curves.easeInOut,
     ));
+    
+    _initAndDecrypt();
+  }
+  
+  @override
+  void didUpdateWidget(JournalTile oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.content != oldWidget.content ||
+        widget.ciphertext != oldWidget.ciphertext || 
+        widget.segments != oldWidget.segments ||
+        widget.encryptionVersion != oldWidget.encryptionVersion ||
+        widget.nonce != oldWidget.nonce ||
+        widget.mac != oldWidget.mac) {
+      _initAndDecrypt();
+    }
+  }
+
+  Future<void> _initAndDecrypt() async {
+     if (!mounted) return;
+     
+     setState(() {
+       _isDecrypting = true;
+       _displayContent = "⏳ Waiting for key..."; // Set initial state for decryption
+     });
+
+     // 1. Initial simple text (if not encrypted)
+     String tempContent = "";
+     final safeSegments = (widget.segments is List) ? widget.segments as List : [];
+     
+     // If there's a ciphertext, it means the content is encrypted.
+     // We'll try to decrypt it. If not, we check for segments or fallback.
+     if (widget.encryptionVersion == null || widget.encryptionVersion == 0) {
+       if (widget.content != null && widget.content!.trim().isNotEmpty) {
+          tempContent = widget.content!;
+       } else if (widget.ciphertext != null && widget.ciphertext!.trim().isNotEmpty) {
+         tempContent = widget.ciphertext!; 
+       } else if (safeSegments.isNotEmpty) {
+         tempContent = safeSegments.map((seg) => seg['text'] ?? seg['content'] ?? "").join(" ");
+       }
+     }
+     
+     // 2. Perform Decryption if needed
+     if (widget.encryptionVersion == 1) {
+       // A. Main Content Decryption (Personal Journal)
+       if (widget.ciphertext != null && widget.nonce != null && widget.mac != null) {
+          try {
+             final decrypted = await EncryptionService.instance.decryptText(
+                widget.ciphertext!, widget.nonce!, widget.mac!);
+             if (decrypted != null) tempContent = decrypted;
+          } catch (e) {
+             debugPrint("⚠️ JournalTile Decryption Failed: $e");
+             tempContent = "🔒 Decryption Failed";
+          }
+       } 
+       // B. Segments Decryption (Shared Journal)
+       else if (safeSegments.isNotEmpty) {
+          List<String> decryptedSegments = [];
+          for (var seg in safeSegments) {
+             if (seg['encryptionVersion'] == 1 && 
+                 seg['ciphertext'] != null && 
+                 seg['nonce'] != null && 
+                 seg['mac'] != null) {
+                try {
+                   final decrypted = await EncryptionService.instance.decryptText(
+                      seg['ciphertext'], seg['nonce'], seg['mac']);
+                   decryptedSegments.add(decrypted ?? "Error");
+                } catch (e) {
+                   decryptedSegments.add("🔒 Error");
+                }
+             } else {
+                decryptedSegments.add(seg['text'] ?? seg['content'] ?? "");
+             }
+          }
+          if (decryptedSegments.isNotEmpty) {
+            tempContent = decryptedSegments.join(" ");
+          }
+       } else {
+         // If encryptionVersion is 1 but no ciphertext/segments, it's likely just a placeholder
+         tempContent = "🔒 Encrypted Journal";
+       }
+     }
+     
+     if (mounted) {
+       setState(() {
+         _displayContent = tempContent;
+         _isDecrypting = false;
+       });
+     }
   }
 
   @override
@@ -142,16 +243,15 @@ class _JournalTileState extends State<JournalTile>
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final colorScheme = theme.colorScheme;
-
-    final safeSegments =
-        (widget.segments is List) ? widget.segments as List : <dynamic>[];
-    final displayContent =
-        (widget.content != null && widget.content!.trim().isNotEmpty)
-            ? widget.content!
-            : (safeSegments.isNotEmpty
-                ? safeSegments.map((seg) => seg['text']).join(" ")
-                : "");
-
+    
+    // ✨ Handle decryption state
+    if (_isDecrypting && widget.encryptionVersion == 1) {
+       _displayContent = "⏳ Waiting for key...";
+    }
+    
+    // Only use _displayContent here
+    final safeSegments = (widget.segments is List) ? widget.segments as List : [];
+    
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4.0),
       child: AnimatedBuilder(
@@ -224,17 +324,22 @@ class _JournalTileState extends State<JournalTile>
                         ],
                       ),
                       
-                      if (displayContent.isNotEmpty) ...[
+                      if (_displayContent.isNotEmpty) ...[
                         const SizedBox(height: 8),
-                        Text(
-                          displayContent,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            color: colorScheme.onSurfaceVariant,
-                            height: 1.4,
+                        if (_displayContent == "⏳ Waiting for key...")
+                          const EncryptionStatusBubble(status: 'waiting')
+                        else if (_displayContent == "🔒 Encrypted Journal" || _displayContent == "🔒 Encrypted content" || _displayContent == "🔒 Decryption Failed")
+                          const EncryptionStatusBubble(status: 'locked')
+                        else
+                          Text(
+                            _displayContent,
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: colorScheme.onSurfaceVariant,
+                              height: 1.4,
+                            ),
+                            maxLines: 3,
+                            overflow: TextOverflow.ellipsis,
                           ),
-                          maxLines: 3,
-                          overflow: TextOverflow.ellipsis,
-                        ),
                       ],
                       const SizedBox(height: 12),
 
@@ -248,6 +353,12 @@ class _JournalTileState extends State<JournalTile>
                               color: colorScheme.onSurfaceVariant,
                             ),
                           ),
+
+                          // ✨ Lock Icon
+                          if (widget.encryptionVersion == 1) ...[
+                            const SizedBox(width: 8),
+                            Icon(Icons.lock, size: 12, color: colorScheme.primary.withOpacity(0.7)),
+                          ],
                           const Spacer(),
                           if (safeSegments.isNotEmpty && widget.isShared)
                              Text(

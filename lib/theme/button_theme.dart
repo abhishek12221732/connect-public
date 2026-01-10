@@ -112,4 +112,19 @@ class AppButtonTheme {
   static final oceanDarkElevatedButtonTheme = _createElevatedButtonTheme(AppColors.oceanDarkPrimary, AppColors.oceanDarkOnPrimary, false);
   static final oceanDarkOutlinedButtonTheme = _createOutlinedButtonTheme(AppColors.oceanDarkPrimary);
   static final oceanDarkTextButtonTheme = _createTextButtonTheme(AppColors.oceanDarkPrimary);
+
+  // ✨ --- NEW: Midnight (OLED) Buttons ---
+  static final midnightElevatedButtonTheme = _createElevatedButtonTheme(AppColors.midnightPrimary, AppColors.midnightOnPrimary, false);
+  static final midnightOutlinedButtonTheme = _createOutlinedButtonTheme(AppColors.midnightPrimary);
+  static final midnightTextButtonTheme = _createTextButtonTheme(AppColors.midnightPrimary);
+
+  // ✨ --- NEW: Eclipse (Luxury) Buttons ---
+  static final eclipseElevatedButtonTheme = _createElevatedButtonTheme(AppColors.eclipsePrimary, AppColors.eclipseOnPrimary, false);
+  static final eclipseOutlinedButtonTheme = _createOutlinedButtonTheme(AppColors.eclipsePrimary);
+  static final eclipseTextButtonTheme = _createTextButtonTheme(AppColors.eclipsePrimary);
+
+  // ✨ --- NEW: Aurora (Nature) Buttons ---
+  static final auroraElevatedButtonTheme = _createElevatedButtonTheme(AppColors.auroraPrimary, AppColors.auroraOnPrimary, false);
+  static final auroraOutlinedButtonTheme = _createOutlinedButtonTheme(AppColors.auroraPrimary);
+  static final auroraTextButtonTheme = _createTextButtonTheme(AppColors.auroraPrimary);
 }

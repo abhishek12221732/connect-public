@@ -8,6 +8,8 @@ import './dynamic_actions_provider.dart';
 import 'package:feelings/features/journal/screens/journal_screen.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/foundation.dart';
+import 'package:feelings/services/encryption_service.dart';
 
 class JournalProvider with ChangeNotifier {
   final DynamicActionsProvider _dynamicActionsProvider;
@@ -23,6 +25,11 @@ class JournalProvider with ChangeNotifier {
 
   StreamSubscription? _personalJournalsSubscription;
   StreamSubscription? _sharedJournalsSubscription;
+  StreamSubscription? _personalKeyWaitSub;
+  StreamSubscription? _sharedKeyWaitSub;
+  
+  bool _isWaitingForPersonalKey = false;
+  bool _isWaitingForSharedKey = false;
 
   List<Map<String, dynamic>> get personalEntries => _personalEntries;
   List<Map<String, dynamic>> get sharedEntries => _sharedEntries;
@@ -38,6 +45,8 @@ class JournalProvider with ChangeNotifier {
     // ... (unchanged)
     _personalJournalsSubscription?.cancel();
     _sharedJournalsSubscription?.cancel();
+    _personalKeyWaitSub?.cancel();
+    _sharedKeyWaitSub?.cancel();
     _personalEntries = [];
     _sharedEntries = [];
     filterToShowOnNextLoad = null;
@@ -48,11 +57,20 @@ class JournalProvider with ChangeNotifier {
 
   // ----- PERSONAL JOURNAL METHODS -----
   // ... (all personal journal methods are unchanged) ...
-  void listenToPersonalJournals(String userId) {
+  void listenToPersonalJournals(String userId) async {
+    // 1. Listen for Key Readiness to auto-retry
+    _personalKeyWaitSub?.cancel();
+    _personalKeyWaitSub = EncryptionService.instance.onKeyReady.listen((isReady) {
+      if (isReady && _isWaitingForPersonalKey) {
+        debugPrint("[Journal] Key ready, refreshing personal journals...");
+        _isWaitingForPersonalKey = false;
+        listenToPersonalJournals(userId);
+      }
+    });
     _personalJournalsSubscription?.cancel();
     _personalJournalsSubscription =
         _journalRepository.getPersonalJournalEntries(userId).listen(
-      (snapshot) {
+      (snapshot) async {
         // ✨ --- [GUARD 1: ON-DATA] --- ✨
         // If the user is null, a logout just happened. Stop.
         if (FirebaseAuth.instance.currentUser == null) {
@@ -60,11 +78,44 @@ class JournalProvider with ChangeNotifier {
           return;
         }
 
-        _personalEntries = snapshot.docs.map((doc) {
+        List<Map<String, dynamic>> processedEntries = [];
+
+        for (var doc in snapshot.docs) {
           var data = doc.data();
           data['id'] = doc.id;
-          return data;
-        }).toList();
+
+          // ✨ DECRYPTION LOGIC
+          if (data['encryptionVersion'] == 1 && data['ciphertext'] != null) {
+            try {
+              if (!EncryptionService.instance.isReady) {
+                 data['content'] = "⏳ Waiting for key...";
+                 _isWaitingForPersonalKey = true;
+              } else {
+                 final decryptedText = await EncryptionService.instance.decryptText(
+                  data['ciphertext'],
+                  data['nonce'],
+                  data['mac']
+                );
+                data['content'] = decryptedText;
+              }
+            } catch (e) {
+              data['content'] = "🔒 Decryption Failed";
+            }
+          }
+          // ✨ MIGRATION LOGIC
+          else if (EncryptionService.instance.isReady && 
+                   data['encryptionVersion'] == null && 
+                   data['content'] != null && 
+                   (data['content'] as String).isNotEmpty) {
+             // Fire and forget migration
+             _journalRepository.migrateLegacyPersonalJournal(userId, doc.id, data);
+          }
+          // ✨ END DECRYPTION
+
+          processedEntries.add(data);
+        }
+        
+        _personalEntries = processedEntries;
         notifyListeners();
       },
       onError: (error) {
@@ -88,15 +139,24 @@ class JournalProvider with ChangeNotifier {
     );
   }
 
-  Future<DocumentReference> addPersonalJournalEntry(String userId, Map<String, dynamic> entryData) async {
+  Future<DocumentReference> addPersonalJournalEntry(String userId, Map<String, dynamic> entryData, {bool isEncryptionEnabled = false}) async {
     // ✨ [MODIFY] Capture and return the docRef
-    final docRef = await _journalRepository.addPersonalJournalEntry(userId, entryData);
+    final docRef = await _journalRepository.addPersonalJournalEntry(
+      userId, 
+      entryData, 
+      isEncryptionEnabled: isEncryptionEnabled
+    );
     _dynamicActionsProvider.recordPersonalJournalSaved();
     return docRef;
   }
 
-  Future<void> updatePersonalJournalEntry(String userId, String entryId, Map<String, dynamic> entryData) async {
-    await _journalRepository.updatePersonalJournalEntry(userId, entryId, entryData);
+  Future<void> updatePersonalJournalEntry(String userId, String entryId, Map<String, dynamic> entryData, {bool isEncryptionEnabled = false}) async {
+    await _journalRepository.updatePersonalJournalEntry(
+      userId, 
+      entryId, 
+      entryData, 
+      isEncryptionEnabled: isEncryptionEnabled
+    );
     _dynamicActionsProvider.recordPersonalJournalSaved();
   }
 
@@ -121,22 +181,83 @@ class JournalProvider with ChangeNotifier {
 
   // ----- SHARED JOURNAL METHODS -----
 
-  void listenToSharedJournals(String coupleId) {
+  void listenToSharedJournals(String coupleId) async{
+    // 1. Listen for Key Readiness to auto-retry
+    _sharedKeyWaitSub?.cancel();
+    _sharedKeyWaitSub = EncryptionService.instance.onKeyReady.listen((isReady) {
+      if (isReady && _isWaitingForSharedKey) {
+        debugPrint("[Journal] Key ready, refreshing shared journals...");
+        _isWaitingForSharedKey = false;
+        listenToSharedJournals(coupleId);
+      }
+    });
     _sharedJournalsSubscription?.cancel();
     _sharedJournalsSubscription =
         _journalRepository.getSharedJournalEntries(coupleId).listen(
-      (snapshot) {
+      (snapshot)async {
         // ✨ --- [GUARD 1: ON-DATA] --- ✨
         if (FirebaseAuth.instance.currentUser == null) {
           debugPrint("[JournalProvider] Shared journal event received, but user is logged out. Ignoring.");
           return;
         }
 
-        _sharedEntries = snapshot.docs.map((doc) {
+        List<Map<String, dynamic>> processedEntries = [];
+
+        for (var doc in snapshot.docs) {
           var data = doc.data();
           data['id'] = doc.id;
-          return data;
-        }).toList();
+
+          // ✨ DECRYPT SEGMENTS
+          if (data.containsKey('segments') && data['segments'] is List) {
+             List<dynamic> segments = List.from(data['segments']);
+             List<dynamic> decryptedSegments = [];
+             bool needsMigration = false;
+             
+             for (var segment in segments) {
+               Map<String, dynamic> segMap = Map<String, dynamic>.from(segment);
+               
+               if (segMap['encryptionVersion'] == 1 && segMap['ciphertext'] != null) {
+                  try {
+                    if (!EncryptionService.instance.isReady) {
+                       segMap['content'] = "⏳ Waiting for key...";
+                       _isWaitingForSharedKey = true;
+                    } else {
+                       final decryptedText = await EncryptionService.instance.decryptText(
+                        segMap['ciphertext'], 
+                        segMap['nonce'], 
+                        segMap['mac']
+                      );
+                      segMap['content'] = decryptedText;
+                    }
+                  } catch (e) {
+                    segMap['content'] = "⚠️ Error";
+                  }
+               }
+               // Check for migration needed
+               else if (EncryptionService.instance.isReady && 
+                        segMap['type'] == 'text' && 
+                        segMap['encryptionVersion'] == null &&
+                        segMap['content'] != null &&
+                        (segMap['content'] as String).isNotEmpty) {
+                 needsMigration = true;
+               }
+               
+               decryptedSegments.add(segMap);
+             }
+             
+             data['segments'] = decryptedSegments;
+             
+             // ✨ MIGRATION TRIGGER
+             if (needsMigration) {
+               _journalRepository.migrateLegacySharedJournal(coupleId, doc.id, data);
+             }
+          }
+          // ✨ END DECRYPT
+          
+          processedEntries.add(data);
+        }
+
+        _sharedEntries = processedEntries;
         notifyListeners();
       },
       onError: (error) {
@@ -155,10 +276,14 @@ class JournalProvider with ChangeNotifier {
   }
 
   // ✨ [MODIFY] This method now calls the new daily-limit helper
-  Future<DocumentReference> addSharedJournalEntry(String coupleId, Map<String, dynamic> entryData) async {
+  Future<DocumentReference> addSharedJournalEntry(String coupleId, Map<String, dynamic> entryData, {bool isEncryptionEnabled = false}) async {
     // 1. Original call
     // ✨ [MODIFY] Capture and return the docRef
-    final docRef = await _journalRepository.addSharedJournalEntry(coupleId, entryData);
+    final docRef = await _journalRepository.addSharedJournalEntry(
+      coupleId, 
+      entryData, 
+      isEncryptionEnabled: isEncryptionEnabled
+    );
     _dynamicActionsProvider.recordSharedJournalSaved();
 
     // ✨ [MODIFY] RHM logging logic (unchanged from your file)
@@ -182,11 +307,16 @@ class JournalProvider with ChangeNotifier {
     String coupleId,
     String userId, // ✨ [ADD] userId is now required
     String entryId,
-    Map<String, dynamic> entryData,
-  ) async {
+    Map<String, dynamic> entryData, {
+      bool isEncryptionEnabled = false,
+  }) async {
     // 1. Original call
     await _journalRepository.updateSharedJournalEntry(
-        coupleId, entryId, entryData);
+        coupleId, 
+        entryId, 
+        entryData, 
+        isEncryptionEnabled: isEncryptionEnabled
+    );
     _dynamicActionsProvider.recordSharedJournalSaved();
 
     // ✨ [ADD] RHM logging logic for updates, with daily limit

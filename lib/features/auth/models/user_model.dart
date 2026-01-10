@@ -31,6 +31,7 @@ class UserModel {
   // New requested fields.
   final String? loveLanguage;
   final Gender? gender;
+  final String? encryptionStatus; // 'pending', 'enabled', 'disabled'
 
   UserModel({
     required this.id,
@@ -49,6 +50,7 @@ class UserModel {
     this.lastUpdated,
     this.loveLanguage,
     this.gender,
+    this.encryptionStatus,
   }) : doneQuestions = doneQuestions ?? [];
 
   factory UserModel.fromMap(Map<String, dynamic> map) {
@@ -69,6 +71,7 @@ class UserModel {
       lastUpdated: (map['lastUpdated'] as Timestamp?)?.toDate(),
       loveLanguage: map['loveLanguage'],
       gender: map['gender'] != null ? Gender.values.byName(map['gender']) : null,
+      encryptionStatus: map['encryptionStatus'],
     );
   }
 
@@ -90,6 +93,7 @@ class UserModel {
       'lastUpdated': lastUpdated,
       'loveLanguage': loveLanguage,
       'gender': gender?.name,
+      'encryptionStatus': encryptionStatus,
     };
   }
 }
